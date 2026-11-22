@@ -48,6 +48,7 @@ jobs:
 
       - name: Build Debug and Release for the iOS Simulator
         run: |
+          echo "export NODE_BINARY=$(command -v node)" > ios/.xcode.env.local
           xcodebuild \
             -workspace ios/vampn.xcworkspace \
             -scheme vampn \
@@ -59,6 +60,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=- \
             VALIDATE_PRODUCT=NO \
+            "EXCLUDED_ARCHS[sdk=iphonesimulator*]=arm64" \
             build
           xcodebuild \
             -workspace ios/vampn.xcworkspace \
@@ -71,4 +73,5 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=- \
             VALIDATE_PRODUCT=NO \
+            "EXCLUDED_ARCHS[sdk=iphonesimulator*]=arm64" \
             build
