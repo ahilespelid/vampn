@@ -57,6 +57,8 @@ jobs:
             -derivedDataPath ios/build/Debug \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=- \
+            VALIDATE_PRODUCT=NO \
             build
           xcodebuild \
             -workspace ios/vampn.xcworkspace \
@@ -67,4 +69,6 @@ jobs:
             -derivedDataPath ios/build/Release \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=- \
+            VALIDATE_PRODUCT=NO \
             build

@@ -28,8 +28,18 @@ export async function loadConfig(): Promise<VampnConfig> {
     return {...defaultConfig};
   }
   try {
-    const parsed = JSON.parse(raw) as Partial<VampnConfig>;
-    const config = {...defaultConfig, ...parsed};
+    const parsed = JSON.parse(raw) as Partial<VampnConfig> & {
+      proxyUrl?: string;
+      proxyToken?: string;
+    };
+    const {proxyUrl, proxyToken, ...rest} = parsed;
+    const config = {...defaultConfig, ...rest};
+    if (!config.agentUrl && proxyUrl) {
+      config.agentUrl = proxyUrl;
+    }
+    if (!config.agentToken && proxyToken) {
+      config.agentToken = proxyToken;
+    }
     if (config.actionMode !== 'force') {
       config.actionMode = 'rotate';
     }

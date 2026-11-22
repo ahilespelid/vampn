@@ -11,8 +11,8 @@ export type VampnConfig = {
   resetCommands: string;
   telegramBotToken: string;
   telegramChatId: string;
-  proxyUrl: string;
-  proxyToken: string;
+  agentUrl: string;
+  agentToken: string;
   actionMode: ActionMode;
 };
 
@@ -27,8 +27,8 @@ export const defaultConfig: VampnConfig = {
   resetCommands: '',
   telegramBotToken: '',
   telegramChatId: '',
-  proxyUrl: '',
-  proxyToken: '',
+  agentUrl: '',
+  agentToken: '',
   actionMode: 'rotate',
 };
 

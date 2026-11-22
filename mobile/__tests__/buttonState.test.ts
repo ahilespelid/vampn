@@ -20,7 +20,7 @@ test('button asks to reset IP when there is no internet', () => {
   expect(pressPlan('offline')).toBe('reset-ip');
 });
 
-test('rotate is the default proxy action and force is explicit', () => {
+test('rotate is the default agent action and force is explicit', () => {
   expect(actionPath('rotate')).toBe('/rotate');
   expect(actionPath('force')).toBe('/force');
   expect(actionLabel('rotate')).toBe('rotate');

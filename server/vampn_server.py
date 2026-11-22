@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plain HTTP listener for the vampn app. No TLS."""
+"""Plain HTTP agent for the vampn app. No TLS."""
 
 import hmac
 import json

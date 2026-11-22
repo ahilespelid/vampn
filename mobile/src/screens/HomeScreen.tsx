@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useState} from 'react';
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,7 +17,7 @@ import {
   type ActionMode,
   type NetState,
 } from '../buttonState';
-import {callProxy} from '../proxy';
+import {callAgent} from '../agent';
 import {loadConfig, saveConfig} from '../storage';
 import {pingTelegram} from '../telegram';
 
@@ -24,12 +25,26 @@ type Props = {
   onOpenSettings: () => void;
 };
 
+function commandOutput(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as {output?: unknown};
+    if (typeof parsed.output === 'string' && parsed.output.length > 0) {
+      return parsed.output;
+    }
+  } catch {
+    // The agent can also return plain text.
+  }
+  return raw;
+}
+
 export function HomeScreen({onOpenSettings}: Props) {
   const insets = useSafeAreaInsets();
   const [net, setNet] = useState<NetState>('unknown');
   const [mode, setMode] = useState<ActionMode>('rotate');
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState('');
+  const [resultOpen, setResultOpen] = useState(false);
+  const [resultText, setResultText] = useState('');
 
   const refresh = useCallback(async (notify: boolean) => {
     const config = await loadConfig();
@@ -72,8 +87,10 @@ export function HomeScreen({onOpenSettings}: Props) {
       const config = await loadConfig();
       const online = await pingTelegram(config, {notify: mode !== 'force'});
       setNet(online ? 'online' : 'offline');
-      const output = await callProxy({...config, actionMode: mode}, mode);
+      const output = await callAgent({...config, actionMode: mode}, mode);
       setDetail(output);
+      setResultText(commandOutput(output));
+      setResultOpen(true);
     } catch (error) {
       setDetail(error instanceof Error ? error.message : 'Ошибка');
     } finally {
@@ -124,6 +141,25 @@ export function HomeScreen({onOpenSettings}: Props) {
           </ScrollView>
         ) : null}
       </View>
+      <Modal
+        visible={resultOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setResultOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Результат</Text>
+            <ScrollView style={styles.modalScroll}>
+              <Text selectable style={styles.modalText}>
+                {resultText}
+              </Text>
+            </ScrollView>
+            <Pressable style={styles.modalClose} onPress={() => setResultOpen(false)}>
+              <Text style={styles.modalCloseText}>Закрыть</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -211,5 +247,41 @@ const styles = StyleSheet.create({
     color: '#d7c7b8',
     fontSize: 13,
     fontFamily: 'monospace',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    backgroundColor: '#1a1720',
+    borderRadius: 16,
+    padding: 16,
+    maxHeight: '70%',
+  },
+  modalTitle: {
+    color: '#f4efe8',
+    fontSize: 18,
+    marginBottom: 12,
+  },
+  modalScroll: {
+    maxHeight: 280,
+  },
+  modalText: {
+    color: '#d7c7b8',
+    fontSize: 13,
+    fontFamily: 'monospace',
+  },
+  modalClose: {
+    marginTop: 14,
+    backgroundColor: '#9d2b3a',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  modalCloseText: {
+    color: '#f4efe8',
+    fontSize: 16,
   },
 });

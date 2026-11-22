@@ -3,13 +3,13 @@ import type {VampnConfig} from './types';
 
 const TOKEN_HEADER = 'X-Vampn-Token';
 
-export async function callProxy(
+export async function callAgent(
   config: VampnConfig,
   mode: ActionMode,
 ): Promise<string> {
-  const base = config.proxyUrl.trim().replace(/\/+$/, '');
+  const base = config.agentUrl.trim().replace(/\/+$/, '');
   if (!base) {
-    return 'Укажите адрес прокси в настройках.';
+    return 'Укажите адрес агента в настройках.';
   }
 
   const path = actionPath(mode);
@@ -17,7 +17,7 @@ export async function callProxy(
     const response = await fetch(`${base}${path}`, {
       method: 'POST',
       headers: {
-        [TOKEN_HEADER]: config.proxyToken,
+        [TOKEN_HEADER]: config.agentToken,
       },
     });
     const text = (await response.text()).trim();
@@ -26,6 +26,6 @@ export async function callProxy(
     }
     return text || `Готово (${response.status})`;
   } catch (error) {
-    return error instanceof Error ? error.message : 'Прокси недоступен';
+    return error instanceof Error ? error.message : 'Агент недоступен';
   }
 }
