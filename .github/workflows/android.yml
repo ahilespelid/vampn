@@ -1,0 +1,57 @@
+name: Android
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assemble:
+    name: Assemble debug and release APKs
+    runs-on: ubuntu-latest
+    container: reactnativecommunity/react-native-android:v22.0
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gradle-home/caches
+            /opt/gradle-home/wrapper
+          key: gradle-${{ hashFiles('mobile/android/gradle/wrapper/gradle-wrapper.properties', 'mobile/package-lock.json') }}
+          restore-keys: gradle-
+
+      - name: Install the NDK pinned by the app
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;27.1.12297006"
+
+      - name: Install npm dependencies
+        working-directory: mobile
+        run: npm ci
+
+      - name: Assemble debug and release APKs
+        working-directory: mobile/android
+        run: chmod +x gradlew && ./gradlew assembleDebug assembleRelease --no-daemon
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: vampn-apk
+          path: |
+            mobile/android/app/build/outputs/apk/debug/*.apk
+            mobile/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
