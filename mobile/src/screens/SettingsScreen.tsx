@@ -142,6 +142,17 @@ export function SettingsScreen({onClose}: Props) {
           value={config.telegramChatId}
           onChangeText={set('telegramChatId')}
         />
+        <Field
+          label="Адрес прокси"
+          value={config.proxyUrl}
+          onChangeText={set('proxyUrl')}
+        />
+        <Field
+          label="Токен прокси"
+          value={config.proxyToken}
+          onChangeText={set('proxyToken')}
+          secure
+        />
         <Pressable style={styles.save} onPress={onSave}>
           <Text style={styles.saveText}>Сохранить</Text>
         </Pressable>

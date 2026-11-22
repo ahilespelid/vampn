@@ -10,13 +10,14 @@ import {
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 import {
+  actionLabel,
   buttonLabel,
-  pressPlan,
   showsOfflineStatus,
+  type ActionMode,
   type NetState,
 } from '../buttonState';
-import {runSsh} from '../ssh';
-import {loadConfig} from '../storage';
+import {callProxy} from '../proxy';
+import {loadConfig, saveConfig} from '../storage';
 import {pingTelegram} from '../telegram';
 
 type Props = {
@@ -26,6 +27,7 @@ type Props = {
 export function HomeScreen({onOpenSettings}: Props) {
   const insets = useSafeAreaInsets();
   const [net, setNet] = useState<NetState>('unknown');
+  const [mode, setMode] = useState<ActionMode>('rotate');
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState('');
 
@@ -38,40 +40,39 @@ export function HomeScreen({onOpenSettings}: Props) {
 
   useEffect(() => {
     let active = true;
-    refresh(false).catch(() => {
-      if (active) {
-        setNet('offline');
-      }
-    });
+    refresh(false)
+      .then(result => {
+        if (active && result) {
+          setMode(result.config.actionMode === 'force' ? 'force' : 'rotate');
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setNet('offline');
+        }
+      });
     return () => {
       active = false;
     };
   }, [refresh]);
 
+  const chooseMode = async (next: ActionMode) => {
+    setMode(next);
+    const config = await loadConfig();
+    await saveConfig({...config, actionMode: next});
+  };
+
   const onPress = async () => {
     if (busy) {
       return;
     }
-    const plan = pressPlan(net);
     setBusy(true);
     setDetail('');
     try {
       const config = await loadConfig();
-      if (plan === 'reset-ip') {
-        const output = await runSsh(config, 'reset');
-        setDetail(output);
-        const online = await pingTelegram(config, {notify: false});
-        setNet(online ? 'online' : 'offline');
-        return;
-      }
-
-      const online = await pingTelegram(config, {notify: true});
+      const online = await pingTelegram(config, {notify: mode !== 'force'});
       setNet(online ? 'online' : 'offline');
-      if (!online) {
-        setDetail('нет интернет');
-        return;
-      }
-      const output = await runSsh(config, 'normal');
+      const output = await callProxy({...config, actionMode: mode}, mode);
       setDetail(output);
     } catch (error) {
       setDetail(error instanceof Error ? error.message : 'Ошибка');
@@ -93,6 +94,19 @@ export function HomeScreen({onOpenSettings}: Props) {
       </Pressable>
       <View style={styles.center}>
         <Text style={styles.wordmark}>vampn</Text>
+        <View style={styles.modes}>
+          {(['rotate', 'force'] as ActionMode[]).map(item => {
+            const selected = mode === item;
+            return (
+              <Pressable
+                key={item}
+                onPress={() => chooseMode(item)}
+                style={[styles.mode, selected ? styles.modeSelected : null]}>
+                <Text style={styles.modeText}>{actionLabel(item)}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={offline ? 'нет интернет' : label}
@@ -137,7 +151,27 @@ const styles = StyleSheet.create({
   wordmark: {
     color: '#8d8794',
     letterSpacing: 4,
-    marginBottom: 28,
+    marginBottom: 18,
+    fontSize: 14,
+  },
+  modes: {
+    flexDirection: 'row',
+    marginBottom: 22,
+  },
+  mode: {
+    borderWidth: 1,
+    borderColor: '#3a3440',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginHorizontal: 6,
+  },
+  modeSelected: {
+    backgroundColor: '#9d2b3a',
+    borderColor: '#9d2b3a',
+  },
+  modeText: {
+    color: '#f4efe8',
     fontSize: 14,
   },
   button: {

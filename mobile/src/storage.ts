@@ -29,7 +29,11 @@ export async function loadConfig(): Promise<VampnConfig> {
   }
   try {
     const parsed = JSON.parse(raw) as Partial<VampnConfig>;
-    return {...defaultConfig, ...parsed};
+    const config = {...defaultConfig, ...parsed};
+    if (config.actionMode !== 'force') {
+      config.actionMode = 'rotate';
+    }
+    return config;
   } catch {
     return {...defaultConfig};
   }

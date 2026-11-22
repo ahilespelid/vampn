@@ -14,6 +14,16 @@ export function showsOfflineStatus(state: NetState, busy: boolean): boolean {
   return state === 'offline' && !busy;
 }
 
+export type ActionMode = 'rotate' | 'force';
+
+export function actionPath(mode: ActionMode): '/rotate' | '/force' {
+  return mode === 'force' ? '/force' : '/rotate';
+}
+
+export function actionLabel(mode: ActionMode): string {
+  return mode === 'force' ? 'сбросить принудительно' : 'rotate';
+}
+
 export type PressPlan = 'check-and-run' | 'reset-ip';
 
 export function pressPlan(state: NetState): PressPlan {

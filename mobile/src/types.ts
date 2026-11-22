@@ -1,3 +1,5 @@
+export type ActionMode = 'rotate' | 'force';
+
 export type VampnConfig = {
   host: string;
   port: string;
@@ -9,6 +11,9 @@ export type VampnConfig = {
   resetCommands: string;
   telegramBotToken: string;
   telegramChatId: string;
+  proxyUrl: string;
+  proxyToken: string;
+  actionMode: ActionMode;
 };
 
 export const defaultConfig: VampnConfig = {
@@ -22,6 +27,9 @@ export const defaultConfig: VampnConfig = {
   resetCommands: '',
   telegramBotToken: '',
   telegramChatId: '',
+  proxyUrl: '',
+  proxyToken: '',
+  actionMode: 'rotate',
 };
 
 export function parseCommands(text: string): string[] {

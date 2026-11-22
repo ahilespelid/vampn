@@ -1,4 +1,6 @@
 import {
+  actionLabel,
+  actionPath,
   buttonLabel,
   pressPlan,
   showsOfflineStatus,
@@ -16,6 +18,13 @@ test('button asks to reset IP when there is no internet', () => {
   expect(buttonLabel('offline', false)).toBe('сбросить IP');
   expect(showsOfflineStatus('offline', false)).toBe(true);
   expect(pressPlan('offline')).toBe('reset-ip');
+});
+
+test('rotate is the default proxy action and force is explicit', () => {
+  expect(actionPath('rotate')).toBe('/rotate');
+  expect(actionPath('force')).toBe('/force');
+  expect(actionLabel('rotate')).toBe('rotate');
+  expect(actionLabel('force')).toBe('сбросить принудительно');
 });
 
 test('parseCommands keeps one command per line', () => {
