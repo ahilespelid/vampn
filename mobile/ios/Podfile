@@ -33,10 +33,8 @@ target 'vampn' do
       # :ccache_enabled => true
     )
     installer.pods_project.targets.each do |target|
+      next unless target.name == 'NMSSH'
       target.build_configurations.each do |build_config|
-        # NMSSH ships a device arm64 libssh2, which the simulator cannot link.
-        build_config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
-        next unless target.name == 'NMSSH'
         build_config.build_settings['CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER'] = 'NO'
         build_config.build_settings['GCC_WARN_INHIBIT_ALL_WARNINGS'] = 'YES'
       end

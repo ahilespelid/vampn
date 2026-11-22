@@ -46,32 +46,49 @@ jobs:
         run: bundle exec pod install
         working-directory: mobile/ios
 
-      - name: Build Debug and Release for the iOS Simulator
+      - name: Build unsigned Release for iPhone
         run: |
+          set -euo pipefail
           echo "export NODE_BINARY=$(command -v node)" > ios/.xcode.env.local
-          xcodebuild \
-            -workspace ios/vampn.xcworkspace \
-            -scheme vampn \
-            -configuration Debug \
-            -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath ios/build/Debug \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=- \
-            VALIDATE_PRODUCT=NO \
-            "EXCLUDED_ARCHS[sdk=iphonesimulator*]=arm64" \
-            build
+          mkdir -p ios/build
           xcodebuild \
             -workspace ios/vampn.xcworkspace \
             -scheme vampn \
             -configuration Release \
-            -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath ios/build/Release \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=- \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER= \
             VALIDATE_PRODUCT=NO \
-            "EXCLUDED_ARCHS[sdk=iphonesimulator*]=arm64" \
-            build
+            build | tee ios/build/xcodebuild.log
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP="ios/build/Release/Build/Products/Release-iphoneos/vampn.app"
+          test -d "$APP"
+          rm -rf ios/dist
+          mkdir -p ios/dist/Payload
+          cp -R "$APP" ios/dist/Payload/
+          (cd ios/dist && zip -qry ../vampn-release.ipa Payload)
+          ls -lh ios/vampn-release.ipa "$APP"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: vampn-ipa
+          path: mobile/ios/vampn-release.ipa
+          if-no-files-found: error
+
+      - name: Upload xcodebuild log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-xcodebuild-log
+          path: mobile/ios/build/xcodebuild.log
+          if-no-files-found: ignore
