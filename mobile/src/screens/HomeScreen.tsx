@@ -20,9 +20,12 @@ import {
 import {callAgent} from '../agent';
 import {loadConfig, saveConfig} from '../storage';
 import {pingTelegram} from '../telegram';
+import type {AppTheme} from '../theme';
 
 type Props = {
+  theme: AppTheme;
   onOpenSettings: () => void;
+  onToggleTheme: () => void;
 };
 
 function commandOutput(raw: string): string {
@@ -37,7 +40,7 @@ function commandOutput(raw: string): string {
   return raw;
 }
 
-export function HomeScreen({onOpenSettings}: Props) {
+export function HomeScreen({theme, onOpenSettings, onToggleTheme}: Props) {
   const insets = useSafeAreaInsets();
   const [net, setNet] = useState<NetState>('unknown');
   const [mode, setMode] = useState<ActionMode>('rotate');
@@ -102,24 +105,40 @@ export function HomeScreen({onOpenSettings}: Props) {
   const offline = showsOfflineStatus(net, busy);
 
   return (
-    <View style={[styles.screen, {paddingTop: insets.top, paddingBottom: insets.bottom}]}>
-      <Pressable
-        style={[styles.settings, {top: insets.top + 16}]}
-        onPress={onOpenSettings}
-        hitSlop={12}>
-        <Text style={styles.settingsText}>настройки</Text>
-      </Pressable>
+    <View
+      style={[
+        styles.screen,
+        {backgroundColor: theme.background, paddingTop: insets.top, paddingBottom: insets.bottom},
+      ]}>
+      <View style={styles.topBar}>
+        <Pressable
+          onPress={onToggleTheme}
+          style={[styles.invert, {backgroundColor: theme.button}]}
+          hitSlop={8}>
+          <Text style={[styles.invertText, {color: theme.buttonText}]}>инверсия</Text>
+        </Pressable>
+        <Pressable onPress={onOpenSettings} hitSlop={12}>
+          <Text style={[styles.settingsText, {color: theme.muted}]}>настройки</Text>
+        </Pressable>
+      </View>
       <View style={styles.center}>
-        <Text style={styles.wordmark}>vampn</Text>
-        <View style={styles.modes}>
+        <Text style={[styles.wordmark, {color: theme.text}]}>vampn</Text>
+        <View style={[styles.modes, {backgroundColor: theme.surface, borderColor: theme.border}]}>
           {(['rotate', 'force'] as ActionMode[]).map(item => {
             const selected = mode === item;
             return (
               <Pressable
                 key={item}
                 onPress={() => chooseMode(item)}
-                style={[styles.mode, selected ? styles.modeSelected : null]}>
-                <Text style={styles.modeText}>{actionLabel(item)}</Text>
+                style={[
+                  styles.mode,
+                  {
+                    backgroundColor: selected ? theme.button : 'transparent',
+                  },
+                ]}>
+                <Text style={[styles.modeText, {color: selected ? theme.buttonText : theme.text}]}>
+                  {actionLabel(item)}
+                </Text>
               </Pressable>
             );
           })}
@@ -128,14 +147,21 @@ export function HomeScreen({onOpenSettings}: Props) {
           accessibilityRole="button"
           accessibilityLabel={offline ? 'нет интернет' : label}
           onPress={onPress}
-          style={[styles.button, offline ? styles.buttonOffline : styles.buttonOnline]}>
-          {busy ? <ActivityIndicator color="#f4efe8" /> : null}
-          <Text style={styles.buttonText}>{label}</Text>
+          style={[
+            styles.button,
+            {backgroundColor: offline ? theme.accent : theme.button},
+          ]}>
+          {busy ? <ActivityIndicator color={theme.buttonText} /> : null}
+          <Text style={[styles.buttonText, {color: theme.buttonText}]}>{label}</Text>
         </Pressable>
-        {offline ? <Text style={styles.status}>нет интернет</Text> : null}
+        {offline ? (
+          <Text style={[styles.status, {color: theme.accent}]}>нет интернет</Text>
+        ) : null}
         {detail ? (
-          <ScrollView style={styles.log} contentContainerStyle={styles.logContent}>
-            <Text selectable style={styles.logText}>
+          <ScrollView
+            style={[styles.log, {backgroundColor: theme.surface, borderColor: theme.border}]}
+            contentContainerStyle={styles.logContent}>
+            <Text selectable style={[styles.logText, {color: theme.muted}]}>
               {detail}
             </Text>
           </ScrollView>
@@ -146,16 +172,18 @@ export function HomeScreen({onOpenSettings}: Props) {
         transparent
         animationType="fade"
         onRequestClose={() => setResultOpen(false)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Результат</Text>
+        <View style={[styles.modalBackdrop, {backgroundColor: theme.backdrop}]}>
+          <View style={[styles.modalCard, {backgroundColor: theme.surface}]}>
+            <Text style={[styles.modalTitle, {color: theme.text}]}>Результат</Text>
             <ScrollView style={styles.modalScroll}>
-              <Text selectable style={styles.modalText}>
+              <Text selectable style={[styles.modalText, {color: theme.muted}]}>
                 {resultText}
               </Text>
             </ScrollView>
-            <Pressable style={styles.modalClose} onPress={() => setResultOpen(false)}>
-              <Text style={styles.modalCloseText}>Закрыть</Text>
+            <Pressable
+              style={[styles.modalClose, {backgroundColor: theme.button}]}
+              onPress={() => setResultOpen(false)}>
+              <Text style={[styles.modalCloseText, {color: theme.buttonText}]}>Закрыть</Text>
             </Pressable>
           </View>
         </View>
@@ -167,121 +195,117 @@ export function HomeScreen({onOpenSettings}: Props) {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#0e0d12',
+    paddingHorizontal: 20,
   },
-  settings: {
-    position: 'absolute',
-    right: 20,
-    zIndex: 2,
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  invert: {
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  invertText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   settingsText: {
-    color: '#d7c7b8',
-    fontSize: 16,
+    fontSize: 15,
   },
   center: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 24,
   },
   wordmark: {
-    color: '#8d8794',
-    letterSpacing: 4,
-    marginBottom: 18,
-    fontSize: 14,
+    fontSize: 40,
+    fontWeight: '700',
+    marginBottom: 22,
   },
   modes: {
     flexDirection: 'row',
-    marginBottom: 22,
+    borderWidth: 1,
+    borderRadius: 999,
+    padding: 4,
+    marginBottom: 28,
   },
   mode: {
-    borderWidth: 1,
-    borderColor: '#3a3440',
-    borderRadius: 14,
+    borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    marginHorizontal: 6,
-  },
-  modeSelected: {
-    backgroundColor: '#9d2b3a',
-    borderColor: '#9d2b3a',
   },
   modeText: {
-    color: '#f4efe8',
     fontSize: 14,
+    fontWeight: '600',
   },
   button: {
     width: 280,
-    height: 280,
-    borderRadius: 140,
+    minHeight: 92,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 28,
-  },
-  buttonOnline: {
-    backgroundColor: '#9d2b3a',
-  },
-  buttonOffline: {
-    backgroundColor: '#c47b2b',
+    paddingHorizontal: 24,
+    paddingVertical: 22,
   },
   buttonText: {
-    color: '#f4efe8',
-    fontSize: 28,
+    fontSize: 26,
+    fontWeight: '700',
     textAlign: 'center',
-    marginTop: 8,
   },
   status: {
-    color: '#f4efe8',
-    marginTop: 22,
-    fontSize: 18,
+    marginTop: 18,
+    fontSize: 16,
+    fontWeight: '600',
   },
   log: {
-    maxHeight: 160,
+    maxHeight: 140,
     marginTop: 18,
     alignSelf: 'stretch',
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   logContent: {
-    paddingBottom: 8,
+    paddingBottom: 4,
   },
   logText: {
-    color: '#d7c7b8',
     fontSize: 13,
     fontFamily: 'monospace',
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
     justifyContent: 'center',
     padding: 24,
   },
   modalCard: {
-    backgroundColor: '#1a1720',
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 16,
     maxHeight: '70%',
   },
   modalTitle: {
-    color: '#f4efe8',
-    fontSize: 18,
+    fontSize: 22,
+    fontWeight: '700',
     marginBottom: 12,
   },
   modalScroll: {
     maxHeight: 280,
   },
   modalText: {
-    color: '#d7c7b8',
     fontSize: 13,
     fontFamily: 'monospace',
   },
   modalClose: {
     marginTop: 14,
-    backgroundColor: '#9d2b3a',
-    borderRadius: 12,
+    borderRadius: 999,
     paddingVertical: 12,
     alignItems: 'center',
   },
   modalCloseText: {
-    color: '#f4efe8',
     fontSize: 16,
+    fontWeight: '600',
   },
 });

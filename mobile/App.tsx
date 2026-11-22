@@ -4,18 +4,25 @@ import {SafeAreaProvider} from 'react-native-safe-area-context';
 
 import {HomeScreen} from './src/screens/HomeScreen';
 import {SettingsScreen} from './src/screens/SettingsScreen';
+import {themeFor} from './src/theme';
 
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [inverted, setInverted] = useState(false);
+  const theme = themeFor(inverted);
 
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle="light-content" />
-      <View style={styles.root}>
+      <StatusBar barStyle={inverted ? 'light-content' : 'dark-content'} />
+      <View style={[styles.root, {backgroundColor: theme.background}]}>
         {settingsOpen ? (
-          <SettingsScreen onClose={() => setSettingsOpen(false)} />
+          <SettingsScreen theme={theme} onClose={() => setSettingsOpen(false)} />
         ) : (
-          <HomeScreen onOpenSettings={() => setSettingsOpen(true)} />
+          <HomeScreen
+            theme={theme}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onToggleTheme={() => setInverted(value => !value)}
+          />
         )}
       </View>
     </SafeAreaProvider>
@@ -25,7 +32,6 @@ function App() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#0e0d12',
   },
 });
 
