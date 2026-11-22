@@ -3,9 +3,27 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {defaultConfig, type VampnConfig} from './types';
 
 const STORAGE_KEY = '@vampn/config';
+const memory = new Map<string, string>();
+
+async function readRaw(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(STORAGE_KEY);
+  } catch {
+    return memory.get(STORAGE_KEY) ?? null;
+  }
+}
+
+async function writeRaw(value: string): Promise<void> {
+  memory.set(STORAGE_KEY, value);
+  try {
+    await AsyncStorage.setItem(STORAGE_KEY, value);
+  } catch {
+    // Expo Go can boot before the native storage module is usable.
+  }
+}
 
 export async function loadConfig(): Promise<VampnConfig> {
-  const raw = await AsyncStorage.getItem(STORAGE_KEY);
+  const raw = await readRaw();
   if (!raw) {
     return {...defaultConfig};
   }
@@ -18,5 +36,5 @@ export async function loadConfig(): Promise<VampnConfig> {
 }
 
 export async function saveConfig(config: VampnConfig): Promise<void> {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  await writeRaw(JSON.stringify(config));
 }

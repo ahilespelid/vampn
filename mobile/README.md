@@ -36,6 +36,18 @@ cd ios && bundle exec pod install && cd ..
 npm run ios
 ```
 
+## Expo Go
+
+On the phone, in Debian under UserLand:
+
+```sh
+command -v git >/dev/null 2>&1 || { apt-get update && apt-get install -y git; }; git clone https://github.com/ahilespelid/vampn.git 2>/dev/null || git -C vampn pull; cd vampn/mobile && sh setup-expo.sh
+```
+
+The script installs Node.js 22 if it is missing, installs dependencies and Expo, and starts the dev server on port 8081. Open the printed `exp://` link in Expo Go on the same phone.
+
+Telegram status and the button work there. SSH does not: Expo Go has no `NativeVampnSsh` module, so the log says the command is available only in the built app.
+
 ## Tests
 
 ```sh

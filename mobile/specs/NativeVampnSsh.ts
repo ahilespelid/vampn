@@ -4,4 +4,10 @@ export interface Spec extends TurboModule {
   readonly exec: (requestJson: string) => Promise<string>;
 }
 
-export default TurboModuleRegistry.getEnforcing<Spec>('NativeVampnSsh');
+export function getNativeVampnSsh(): Spec | null {
+  try {
+    return TurboModuleRegistry.get<Spec>('NativeVampnSsh') ?? null;
+  } catch {
+    return null;
+  }
+}

@@ -1,6 +1,4 @@
-import {TurboModuleRegistry} from 'react-native';
-
-import type {Spec} from '../specs/NativeVampnSsh';
+import {getNativeVampnSsh} from '../specs/NativeVampnSsh';
 import {parseCommands, type VampnConfig} from './types';
 
 type CommandSet = 'normal' | 'reset';
@@ -10,13 +8,8 @@ type SshResponse = {
   output?: string;
 };
 
-function nativeSsh(): Spec {
-  const mod = TurboModuleRegistry.get<Spec>('NativeVampnSsh');
-  if (!mod) {
-    throw new Error('SSH-модуль не подключён');
-  }
-  return mod;
-}
+const EXPO_SSH_MESSAGE =
+  'SSH недоступен в Expo Go: модуль NativeVampnSsh есть только в собранном приложении.';
 
 export async function runSsh(
   config: VampnConfig,
@@ -45,7 +38,12 @@ export async function runSsh(
     commands,
   };
 
-  const raw = await nativeSsh().exec(JSON.stringify(request));
+  const ssh = getNativeVampnSsh();
+  if (!ssh) {
+    return EXPO_SSH_MESSAGE;
+  }
+
+  const raw = await ssh.exec(JSON.stringify(request));
   let parsed: SshResponse = {};
   try {
     parsed = JSON.parse(raw) as SshResponse;
