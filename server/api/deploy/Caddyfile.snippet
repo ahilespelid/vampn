@@ -1,0 +1,5 @@
+# /etc/caddy/sites.d/vampn-api.caddy  (пример; по умолчанию адрес vamp.new.litewms.ru)
+vamp.new.litewms.ru {
+	encode gzip
+	reverse_proxy 127.0.0.1:8741
+}

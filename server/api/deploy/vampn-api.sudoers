@@ -1,0 +1,16 @@
+# /etc/sudoers.d/vampn-api  (chmod 440; проверять visudo -cf). Пользователь vampn может запускать ТОЛЬКО эти подкоманды.
+# Имена пользователей дополнительно проверяет API (латиница, цифры, _ . -, до 32 символов).
+Cmnd_Alias VAMPN_API = /usr/local/sbin/vampn status, \
+                       /usr/local/sbin/vampn server, \
+                       /usr/local/sbin/vampn list, \
+                       /usr/local/sbin/vampn rotate, \
+                       /usr/local/sbin/vampn rotate --force, \
+                       /usr/local/sbin/vampn reboot, \
+                       /usr/local/sbin/vampn reboot hard, \
+                       /usr/local/sbin/vampn emergency on, \
+                       /usr/local/sbin/vampn emergency off, \
+                       /usr/local/sbin/vampn emergency status, \
+                       /usr/local/sbin/vampn link [a-zA-Z0-9_.-]*, \
+                       /usr/local/sbin/vampn resend [a-zA-Z0-9_.-]*, \
+                       /usr/local/sbin/vampn reissue [a-zA-Z0-9_.-]*
+vampn ALL=(root) NOPASSWD: VAMPN_API

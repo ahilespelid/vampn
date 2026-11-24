@@ -1,0 +1,19 @@
+# Пример службы. На сервер НЕ ставится без отдельного подтверждения.
+[Unit]
+Description=vampn API (FastAPI)
+After=network.target docker.service
+
+[Service]
+User=vampn
+Group=vampn
+WorkingDirectory=/var/www/vampn/api
+EnvironmentFile=/etc/vampn-api/api.env
+ExecStart=/var/www/vampn/api/.venv/bin/uvicorn vampn_api.asgi:app --host 127.0.0.1 --port 8741 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=false
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
