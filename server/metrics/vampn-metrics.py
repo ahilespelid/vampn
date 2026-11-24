@@ -8,7 +8,14 @@
   offline_min    сколько минут нет связи с VPN-сервером    (раз в 5 минут, из status)
   mirror_age     возраст копии данных VPN-сервера, секунд  (раз в 5 минут, из status)
 Режимы: --selftest, --dry-run (показать, что записалось бы), без аргументов - записать.
+
+Тревога о массовом выпадении людей: если за последние 5 минут онлайн был не меньше 4, а теперь упал до 30% и ниже
+две минуты подряд, при этом vampn list ответил (значит, туннель homeserv - VPS жив), в Telegram уходит сообщение
+(через tg, в тему alerts): вероятно, часть провайдеров перестала пускать на адрес сервера. Когда онлайн вернулся
+до 60% прежнего, приходит сообщение о восстановлении. Состояние лежит в /var/lib/vampn-metrics/state.json.
 """
+import json
+import os
 import re
 import subprocess
 import sys
@@ -19,6 +26,14 @@ VAMPN = "/usr/local/sbin/vampn"
 SERVER = "vpn"
 ONLINE_SECONDS = 180
 RETENTION_DAYS = 90
+STATE_DIR = "/var/lib/vampn-metrics"
+STATE_FILE = STATE_DIR + "/state.json"
+DROP_WINDOW = 300      # смотрим максимум онлайна за последние 5 минут (резкий обрыв, а не вечерний спад)
+DROP_MIN_PEAK = 4      # меньше людей - тревогу не поднимаем
+DROP_RATIO = 0.3       # упал до 30% и ниже
+DROP_CONFIRM = 2       # столько минут подряд
+RECOVER_RATIO = 0.6    # вернулся до 60% прежнего - отбой
+REALERT_AFTER = 6 * 3600
 TIME_RE = r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)"
 LIST_RE = re.compile(r"^(\S+)\s+(\d+\.\d+\.\d+\.\d+)\s+(\S+)\s+(?:" + TIME_RE + r"|никогда)\s*$")
 HANDSHAKE_RE = re.compile(r"рукопожатие\s+(\d+)\s*с\s+назад")
@@ -55,6 +70,57 @@ def parse_status(text, now):
     if m:
         out["mirror_age"] = max(0.0, (now - parse_ts(m.group(1))).total_seconds())
     return out
+
+
+def evaluate_drop(state, ts, online):
+    """-> (новое состояние, сообщение или None). ts - секунды (epoch), online - число людей онлайн сейчас."""
+    hist = [h for h in state.get("history", []) if ts - h[0] <= DROP_WINDOW]
+    peak = max([h[1] for h in hist], default=0)
+    st = {"history": hist + [[ts, online]], "low": state.get("low", 0),
+          "alert_peak": state.get("alert_peak", 0), "alerted_at": state.get("alerted_at")}
+    msg = None
+    if st["alerted_at"] is None:
+        if peak >= DROP_MIN_PEAK and online <= peak * DROP_RATIO:
+            st["low"] += 1
+        else:
+            st["low"] = 0
+        if st["low"] >= DROP_CONFIRM:
+            st["alerted_at"], st["alert_peak"], st["low"] = ts, peak, 0
+            msg = ("онлайн упал с %d до %d человек за несколько минут, а туннель homeserv - VPS жив. "
+                   "Похоже, часть провайдеров перестала пускать на адрес сервера. Проверьте подключение с телефона на мобильном "
+                   "интернете; если адрес режется - ssh homeserv vampn rotate --force" % (peak, online))
+    else:
+        if online >= st["alert_peak"] * RECOVER_RATIO:
+            msg = "онлайн вернулся: %d человек (перед падением было %d)" % (online, st["alert_peak"])
+            st["alerted_at"], st["alert_peak"], st["low"] = None, 0, 0
+        elif ts - st["alerted_at"] >= REALERT_AFTER:
+            st["alerted_at"] = ts
+            msg = "онлайн всё ещё низкий: %d человек (до падения было %d)" % (online, st["alert_peak"])
+    return st, msg
+
+
+def load_state():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(state, fh)
+    os.replace(tmp, STATE_FILE)
+
+
+def send_alert(text):
+    try:
+        subprocess.run(["tg", "notify", "alerts", "🛡 " + text], capture_output=True, timeout=60)
+    except Exception:  # noqa: BLE001 - тревога не должна ронять сборщик
+        pass
 
 
 def run_vampn(arg, timeout=60):
@@ -131,6 +197,34 @@ def selftest():
         check("плохое имя метрики отвергается", False)
     except ValueError:
         check("плохое имя метрики отвергается", True)
+    # тревога о выпадении людей
+    t0 = 1000000
+    st, ms = {}, []
+    for i, n in enumerate([6, 6, 7, 6, 1, 1]):          # минута 4: 6 -> 1 и ещё одна минута подряд
+        st, m = evaluate_drop(st, t0 + 60 * i, n)
+        ms.append(m)
+    check("тревога: первое низкое значение ещё не тревога", ms[4] is None)
+    check("тревога: второе подряд - сообщение с цифрами 7 и 1", ms[5] is not None and "с 7 до 1" in ms[5])
+    st, m = evaluate_drop(st, t0 + 60 * 6, 1)
+    check("тревога: повторно не шлётся", m is None)
+    st, m = evaluate_drop(st, t0 + 60 * 7, 5)
+    check("отбой: онлайн вернулся до 60%", m is not None and "вернулся" in m)
+    st, m = evaluate_drop(st, t0 + 60 * 8, 5)
+    check("после отбоя тихо", m is None)
+    st, ms = {}, []
+    for i, n in enumerate([6, 5, 4, 3, 2, 1, 0]):       # плавный вечерний спад - не тревога
+        st, m = evaluate_drop(st, t0 + 120 * i, n)
+        ms.append(m)
+    check("плавный спад (по минуте-две на человека) не даёт тревоги", all(m is None for m in ms))
+    st, m = evaluate_drop({}, t0, 0)
+    check("пустой онлайн без истории - тихо", m is None)
+    st, ms = {}, []
+    for i, n in enumerate([2, 3, 2, 0, 0, 0]):          # малая нагрузка (пик 3 < 4) - тихо
+        st, m = evaluate_drop(st, t0 + 60 * i, n)
+        ms.append(m)
+    check("мало людей (пик < 4) - тихо", all(m is None for m in ms))
+    st, m = evaluate_drop({"alerted_at": t0, "alert_peak": 8, "history": []}, t0 + REALERT_AFTER + 1, 1)
+    check("через 6 часов напоминание, если всё ещё пусто", m is not None and "всё ещё" in m)
     print("selftest: %s" % ("все проверки пройдены" if not fails else "ОШИБКИ: %d" % len(fails)))
     return 0 if not fails else 1
 
@@ -153,17 +247,25 @@ def main():
         return 1
     values = collect(now, with_status, list_text, status_text)
     cleanup = now.hour == 4 and now.minute == 0
+    new_state, alert = evaluate_drop(load_state(), int(now.timestamp()), int(values["users_online"]))
     if dry:
         print("записалось бы (server=%s):" % SERVER)
         for k, v in values.items():
             print("  %-14s %s" % (k, v))
+        print("тревога: %s" % (alert or "нет"))
         return 0
     try:
         sql(build_sql(values, cleanup))
     except Exception as exc:  # noqa: BLE001
         print("не удалось записать в базу: %s" % exc)
         return 1
-    print("записано: " + ", ".join("%s=%s" % kv for kv in values.items()))
+    try:
+        save_state(new_state)
+    except OSError as exc:
+        print("не удалось сохранить состояние: %s" % exc)
+    if alert:
+        send_alert(alert)
+    print("записано: " + ", ".join("%s=%s" % kv for kv in values.items()) + ("; тревога отправлена" if alert else ""))
     return 0
 
 
