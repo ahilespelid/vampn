@@ -35,7 +35,7 @@ export function OfflineBar({link, busy, onRetry}: Props) {
       }}>
       <View style={{width: 10, height: 10, borderRadius: 5, backgroundColor: t.signal}} />
       <View style={{flex: 1, gap: 2}}>
-        <Body style={{fontWeight: '600'}}>{title}</Body>
+        <Body weight="600">{title}</Body>
         <Body muted style={{fontSize: 13, lineHeight: 18}}>
           {hint}
         </Body>

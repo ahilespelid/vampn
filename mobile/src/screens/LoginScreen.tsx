@@ -5,7 +5,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useAuth} from '../auth';
 import {cleanCode, describeError, validEmail} from '../format';
 import {ServerUrlEditor} from '../ServerUrlEditor';
-import {useTheme} from '../theme';
+import {fontStyle, useTheme} from '../theme';
 import {Body, Btn, Field, Label, Notice, Sheet} from '../ui';
 
 const RESEND_COOLDOWN = 30;
@@ -83,7 +83,7 @@ export function LoginScreen() {
         <View style={{gap: 10}}>
           <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
             <View style={{width: 12, height: 12, borderRadius: 6, backgroundColor: t.signal}} />
-            <Text style={{color: t.text, fontFamily: t.font.display, fontSize: 44, fontWeight: '700', letterSpacing: 1}}>vampn</Text>
+            <Text style={{color: t.text, ...fontStyle(t, 'display', '700'), fontSize: 44, letterSpacing: 1}}>vampn</Text>
           </View>
           <Body muted>
             {step === 'email'

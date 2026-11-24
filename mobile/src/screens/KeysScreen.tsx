@@ -48,7 +48,7 @@ export function KeysScreen({notes}: {notes: NotificationsState}) {
       {accounts.map(account => (
         <Card key={account.name} style={{gap: 12}}>
           <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
-            <Body mono style={{fontWeight: '700'}}>
+            <Body mono weight="700">
               {account.name}
             </Body>
             {account.role === 'admin' ? <Pill text="суперадмин" tone="signal" /> : null}
@@ -65,7 +65,7 @@ export function KeysScreen({notes}: {notes: NotificationsState}) {
           <Pressable key={n.id} onPress={() => (n.read_at ? undefined : notes.markRead(n.id).catch(() => undefined))} accessibilityRole="button">
             <Card style={{gap: 10, borderColor: n.read_at ? undefined : '#d71921'}}>
               <View style={{flexDirection: 'row', justifyContent: 'space-between', gap: 8}}>
-                <Body style={{fontWeight: '600', flexShrink: 1}}>{n.title}</Body>
+                <Body weight="600" style={{flexShrink: 1}}>{n.title}</Body>
                 <Pill text={status.label} tone={status.tone} />
               </View>
               <Body muted mono>
@@ -103,7 +103,7 @@ export function KeysScreen({notes}: {notes: NotificationsState}) {
       {keys.map(k => (
         <Card key={k.id} style={{gap: 4}}>
           <View style={{flexDirection: 'row', justifyContent: 'space-between'}}>
-            <Body mono style={{fontWeight: '700'}}>
+            <Body mono weight="700">
               {k.user_name}
             </Body>
             <Body muted mono>

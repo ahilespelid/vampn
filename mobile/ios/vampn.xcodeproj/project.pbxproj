@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FA2010000000000000000000 /* IBMPlexSans-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FA1010000000000000000000 /* IBMPlexSans-Regular.ttf */; };
+		FA2020000000000000000000 /* IBMPlexSans-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FA1020000000000000000000 /* IBMPlexSans-SemiBold.ttf */; };
+		FA2030000000000000000000 /* IBMPlexSans-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FA1030000000000000000000 /* IBMPlexSans-Bold.ttf */; };
+		FA2040000000000000000000 /* IBMPlexMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FA1040000000000000000000 /* IBMPlexMono-Regular.ttf */; };
+		FA2050000000000000000000 /* IBMPlexMono-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FA1050000000000000000000 /* IBMPlexMono-SemiBold.ttf */; };
+		FA2060000000000000000000 /* IBMPlexMono-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FA1060000000000000000000 /* IBMPlexMono-Bold.ttf */; };
+		FA2070000000000000000000 /* Doto-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FA1070000000000000000000 /* Doto-Bold.ttf */; };
+		FA2080000000000000000000 /* DotGothic16-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FA1080000000000000000000 /* DotGothic16-Regular.ttf */; };
 		A11CE0032CA4567400665403 /* NativeVampnSsh.mm in Sources */ = {isa = PBXBuildFile; fileRef = A11CE0022CA4567400665402 /* NativeVampnSsh.mm */; };
 		0C80B921A6F3F58F76C31292 /* libPods-vampn.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-vampn.a */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
@@ -16,6 +24,14 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		FA1010000000000000000000 /* IBMPlexSans-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "IBMPlexSans-Regular.ttf"; path = "vampn/Fonts/IBMPlexSans-Regular.ttf"; sourceTree = "<group>"; };
+		FA1020000000000000000000 /* IBMPlexSans-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "IBMPlexSans-SemiBold.ttf"; path = "vampn/Fonts/IBMPlexSans-SemiBold.ttf"; sourceTree = "<group>"; };
+		FA1030000000000000000000 /* IBMPlexSans-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "IBMPlexSans-Bold.ttf"; path = "vampn/Fonts/IBMPlexSans-Bold.ttf"; sourceTree = "<group>"; };
+		FA1040000000000000000000 /* IBMPlexMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "IBMPlexMono-Regular.ttf"; path = "vampn/Fonts/IBMPlexMono-Regular.ttf"; sourceTree = "<group>"; };
+		FA1050000000000000000000 /* IBMPlexMono-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "IBMPlexMono-SemiBold.ttf"; path = "vampn/Fonts/IBMPlexMono-SemiBold.ttf"; sourceTree = "<group>"; };
+		FA1060000000000000000000 /* IBMPlexMono-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "IBMPlexMono-Bold.ttf"; path = "vampn/Fonts/IBMPlexMono-Bold.ttf"; sourceTree = "<group>"; };
+		FA1070000000000000000000 /* Doto-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "Doto-Bold.ttf"; path = "vampn/Fonts/Doto-Bold.ttf"; sourceTree = "<group>"; };
+		FA1080000000000000000000 /* DotGothic16-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "DotGothic16-Regular.ttf"; path = "vampn/Fonts/DotGothic16-Regular.ttf"; sourceTree = "<group>"; };
 		A11CE0012CA4567400665401 /* NativeVampnSsh.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = NativeVampnSsh.h; path = vampn/NativeVampnSsh.h; sourceTree = "<group>"; };
 		A11CE0022CA4567400665402 /* NativeVampnSsh.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = NativeVampnSsh.mm; path = vampn/NativeVampnSsh.mm; sourceTree = "<group>"; };
 		13B07F961A680F5B00A75B9A /* vampn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = vampn.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -43,6 +59,21 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		FA3010000000000000000000 /* Fonts */ = {
+			isa = PBXGroup;
+			children = (
+				FA1010000000000000000000 /* IBMPlexSans-Regular.ttf */,
+				FA1020000000000000000000 /* IBMPlexSans-SemiBold.ttf */,
+				FA1030000000000000000000 /* IBMPlexSans-Bold.ttf */,
+				FA1040000000000000000000 /* IBMPlexMono-Regular.ttf */,
+				FA1050000000000000000000 /* IBMPlexMono-SemiBold.ttf */,
+				FA1060000000000000000000 /* IBMPlexMono-Bold.ttf */,
+				FA1070000000000000000000 /* Doto-Bold.ttf */,
+				FA1080000000000000000000 /* DotGothic16-Regular.ttf */,
+			);
+			name = Fonts;
+			sourceTree = "<group>";
+		};
 		13B07FAE1A68108700A75B9A /* vampn */ = {
 			isa = PBXGroup;
 			children = (
@@ -54,6 +85,7 @@
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
+				FA3010000000000000000000 /* Fonts */,
 			);
 			name = vampn;
 			sourceTree = "<group>";
@@ -167,6 +199,14 @@
 			files = (
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
+				FA2010000000000000000000 /* IBMPlexSans-Regular.ttf in Resources */,
+				FA2020000000000000000000 /* IBMPlexSans-SemiBold.ttf in Resources */,
+				FA2030000000000000000000 /* IBMPlexSans-Bold.ttf in Resources */,
+				FA2040000000000000000000 /* IBMPlexMono-Regular.ttf in Resources */,
+				FA2050000000000000000000 /* IBMPlexMono-SemiBold.ttf in Resources */,
+				FA2060000000000000000000 /* IBMPlexMono-Bold.ttf in Resources */,
+				FA2070000000000000000000 /* Doto-Bold.ttf in Resources */,
+				FA2080000000000000000000 /* DotGothic16-Regular.ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

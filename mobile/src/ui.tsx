@@ -19,7 +19,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 import {NETWORK_MESSAGE, TIMEOUT_MESSAGE} from './api';
 import {useAuth} from './auth';
-import {useTheme} from './theme';
+import {fontStyle, useTheme, type FontWeight} from './theme';
 import type {Tone} from './format';
 
 export function Label({children, style}: {children: ReactNode; style?: StyleProp<ViewStyle>}) {
@@ -34,7 +34,7 @@ export function Label({children, style}: {children: ReactNode; style?: StyleProp
 export function Heading({children}: {children: ReactNode}) {
   const t = useTheme();
   return (
-    <Text style={{color: t.text, fontFamily: t.font.display, fontSize: 26, fontWeight: '700', letterSpacing: 0.5}}>
+    <Text style={{color: t.text, ...fontStyle(t, 'display', '700'), fontSize: 26, letterSpacing: 0.5}}>
       {children}
     </Text>
   );
@@ -44,18 +44,21 @@ export function Body({
   children,
   muted,
   mono,
+  weight,
   style,
   selectable,
 }: {
   children: ReactNode;
   muted?: boolean;
   mono?: boolean;
+  /** Жирность: 600 или 700. Задаётся здесь, а не через fontWeight в style (см. fontStyle в theme.ts). */
+  weight?: Exclude<FontWeight, '400'>;
   style?: object;
   selectable?: boolean;
 }) {
   const t = useTheme();
   return (
-    <Text selectable={selectable} style={[{color: muted ? t.muted : t.text, fontFamily: mono ? t.font.mono : t.font.sans, fontSize: mono ? 13 : 15, lineHeight: mono ? 19 : 21}, style]}>
+    <Text selectable={selectable} style={[{color: muted ? t.muted : t.text, ...fontStyle(t, mono ? 'mono' : 'sans', weight), fontSize: mono ? 13 : 15, lineHeight: mono ? 19 : 21}, style]}>
       {children}
     </Text>
   );
@@ -113,7 +116,7 @@ export function Btn({
         opacity: off ? 0.45 : pressed ? 0.8 : 1,
       })}>
       {busy ? <ActivityIndicator color={fg} /> : null}
-      <Text style={{color: fg, fontFamily: t.font.mono, fontSize: small ? 12 : 14, letterSpacing: 1, textTransform: 'uppercase', fontWeight: '600'}}>
+      <Text style={{color: fg, ...fontStyle(t, 'mono', '600'), fontSize: small ? 12 : 14, letterSpacing: 1, textTransform: 'uppercase'}}>
         {title}
       </Text>
     </Pressable>

@@ -180,7 +180,7 @@ export function UsersScreen() {
     <Pressable key={u.id} onPress={() => setSelected(u.name)} accessibilityRole="button" testID={`user-${u.name}`}>
       <Card style={{gap: 4, opacity: u.active ? 1 : 0.6}}>
         <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
-          <Body mono style={{fontWeight: '700'}}>
+          <Body mono weight="700">
             {u.name}
           </Body>
           {u.role === 'admin' ? <Pill text="суперадмин" tone="signal" /> : null}

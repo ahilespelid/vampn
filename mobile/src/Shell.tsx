@@ -10,7 +10,7 @@ import {SettingsScreen} from './screens/SettingsScreen';
 import {StatsScreen} from './screens/StatsScreen';
 import {UsersScreen} from './screens/UsersScreen';
 import {tabsFor, type TabId} from './tabs';
-import {useTheme} from './theme';
+import {fontStyle, useTheme} from './theme';
 import {useNotifications} from './useNotifications';
 
 export function Shell() {
@@ -67,7 +67,7 @@ export function Shell() {
           }}>
           <View style={{width: 10, height: 10, borderRadius: 5, backgroundColor: t.signal}} />
           <View style={{flex: 1}}>
-            <Text style={{color: t.buttonText, fontFamily: t.font.sans, fontSize: 15, fontWeight: '600'}}>{notes.banner.title}</Text>
+            <Text style={{color: t.buttonText, ...fontStyle(t, 'sans', '600'), fontSize: 15}}>{notes.banner.title}</Text>
             <Text style={{color: t.buttonText, opacity: 0.7, fontFamily: t.font.mono, fontSize: 12}}>нажмите, чтобы открыть</Text>
           </View>
         </Pressable>
