@@ -147,6 +147,7 @@ async function mount() {
 
 beforeEach(async () => {
   await AsyncStorage.clear();
+  jest.requireMock('react-native-keychain').__reset();
 });
 
 test('без сессии показывается вход по почте', async () => {

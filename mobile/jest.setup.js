@@ -19,3 +19,23 @@ jest.mock('@react-native-async-storage/async-storage', () => {
     }),
   };
 });
+
+// Keychain в тестах — одна запись в памяти. `__reset` очищает её между тестами.
+jest.mock('react-native-keychain', () => {
+  let item = null;
+  return {
+    ACCESSIBLE: {AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 'AccessibleAfterFirstUnlockThisDeviceOnly'},
+    setGenericPassword: jest.fn(async (username, password) => {
+      item = {username, password};
+      return {service: 'test', storage: 'keychain'};
+    }),
+    getGenericPassword: jest.fn(async () => (item ? {...item, service: 'test', storage: 'keychain'} : false)),
+    resetGenericPassword: jest.fn(async () => {
+      item = null;
+      return true;
+    }),
+    __reset: () => {
+      item = null;
+    },
+  };
+});
