@@ -194,6 +194,11 @@ class MySQLStore:
                          "n.delivered_at,n.read_at,n.created_at FROM notifications n JOIN users u ON u.id=n.user_id "
                          "WHERE n.user_id IN (" + _in(len(user_ids)) + ") ORDER BY n.id DESC LIMIT %s", (*user_ids, limit))
 
+    def recent_key_notification(self, user_id, since):
+        """Уведомление о ключе этого пользователя не моложе `since`: его мог завести vampn при отправке письма."""
+        return self._one("SELECT id, key_id FROM notifications WHERE user_id=%s AND kind='key' AND created_at >= %s "
+                         "ORDER BY id DESC LIMIT 1", (user_id, since))
+
     def notifications_signature(self, user_ids):
         """Дешёвый отпечаток уведомлений пользователя для потока SSE: меняется, когда уведомление появилось
         или у какого-то из них заполнилась отметка (почта, push, доставлено, прочитано). Поля только заполняются."""

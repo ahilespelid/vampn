@@ -75,6 +75,45 @@ def test_reissue_records_key_notification_and_push(env):
     assert lst[0]["delivered_at"] and lst[0]["read_at"]
 
 
+def _vampn_hook_on_reissue(env):
+    """Как хук в почтовой части vampn: при отправке письма с ключом сам заводит ключ и уведомление."""
+    real = env.runner.run_ok
+
+    def run_ok(sub, arg=""):
+        out = real(sub, arg)
+        if sub == "reissue":
+            user = env.store.get_user(arg)
+            kid = env.store.add_key(user["id"], arg, "reissued", "vampn", env.clock())
+            nid = env.store.add_notification(user["id"], kid, "key", "Новый ключ VPN", env.clock())
+            env.store.mark_notification(nid, [user["id"]], "email_sent_at", env.clock())
+        return out
+
+    env.runner.run_ok = run_ok
+
+
+def test_reissue_does_not_duplicate_notification_made_by_vampn(env):
+    _vampn_hook_on_reissue(env)
+    hd, _ = env.login("griga@example.com", {"platform": "android", "name": "Pixel", "push_token": "tok-g"})
+    r = env.client.post("/v1/keys/griga/reissue", headers=hd)
+    assert r.status_code == 200
+    assert len(env.store.keys) == 1 and len(env.store.notifs) == 1
+    assert r.json() == {"key_id": env.store.keys[0]["id"], "notification_id": env.store.notifs[0]["id"]}
+    assert env.store.keys[0]["issued_by"] == "vampn"
+    assert env.store.notifs[0]["push_sent_at"] is not None  # push уходит и для уведомления, заведённого vampn
+
+
+def test_reissue_ignores_old_notification_and_makes_its_own(env):
+    hd, _ = env.login("griga@example.com")
+    uid = env.store.get_user("griga")["id"]
+    kid = env.store.add_key(uid, "griga", "reissued", "vampn", env.clock())
+    env.store.add_notification(uid, kid, "key", "Новый ключ VPN: сменился адрес сервера", env.clock())
+    env.clock.advance(minutes=10)
+    r = env.client.post("/v1/keys/griga/reissue", headers=hd)
+    assert r.status_code == 200
+    assert len(env.store.keys) == 2 and len(env.store.notifs) == 2
+    assert r.json()["notification_id"] == env.store.notifs[1]["id"]
+
+
 def test_notifications_not_visible_to_others(env):
     hg, _ = env.login("griga@example.com")
     env.client.post("/v1/keys/griga/reissue", headers=hg)

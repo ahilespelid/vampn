@@ -204,9 +204,14 @@ def create_app(settings: Optional[Settings] = None, store=None, mailer=None, run
         acc = account_for(p, name)
         runner.run_ok("reissue", acc["name"])  # vampn сам отправляет новый ключ на почту
         now = now_fn()
-        key_id = store.add_key(acc["id"], acc["name"], "reissued", p.accounts[0]["name"], now)
-        nid = store.add_notification(acc["id"], key_id, "key", "Новый ключ VPN", now)
-        store.mark_notification(nid, [acc["id"]], "email_sent_at", now)
+        # при отправке письма vampn сам заводит ключ и уведомление в базе (хук в его почтовой части): второе не создаём
+        recent = store.recent_key_notification(acc["id"], now - timedelta(minutes=2))
+        if recent:
+            key_id, nid = recent["key_id"], recent["id"]
+        else:
+            key_id = store.add_key(acc["id"], acc["name"], "reissued", p.accounts[0]["name"], now)
+            nid = store.add_notification(acc["id"], key_id, "key", "Новый ключ VPN", now)
+            store.mark_notification(nid, [acc["id"]], "email_sent_at", now)
         devices = store.devices_by_email(acc["email"])
         if devices and push.send(devices, "Новый ключ VPN", "Откройте приложение, чтобы получить ключ") > 0:
             store.mark_notification(nid, [acc["id"]], "push_sent_at", now_fn())
