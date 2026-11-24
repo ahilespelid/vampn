@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844">
+<title>vampn / stats / light</title>
+<rect id="background" x="0" y="0" width="390" height="844" fill="#f4f4f2"/>
+<g id="status-bar">
+<text x="32" y="31" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" font-weight="600" fill="#111111">9:41</text>
+<rect x="326.5" y="20.5" width="24" height="11" rx="3.5" fill="none" stroke="#6b6b68" stroke-width="1"/>
+<rect x="328" y="22" width="17" height="8" rx="2" fill="#111111"/>
+<rect x="352" y="24" width="2" height="4" rx="1" fill="#6b6b68"/>
+</g>
+<g id="header">
+<text id="title" x="20" y="80.38" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="26" font-weight="700" letter-spacing="0.5" fill="#111111">статистика</text>
+</g>
+<g id="segmented-sutki">
+<rect id="segmented-bg" x="20" y="98" width="350" height="40" rx="24" fill="#ecece8"/>
+<rect x="24" y="102" width="111.33" height="32" rx="20" fill="#111111"/>
+<text x="79.67" y="122.56" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" letter-spacing="0.8" text-anchor="middle" fill="#ffffff">СУТКИ</text>
+<text x="195" y="122.56" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" letter-spacing="0.8" text-anchor="middle" fill="#111111">3 ДНЯ</text>
+<text x="310.33" y="122.56" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" letter-spacing="0.8" text-anchor="middle" fill="#111111">НЕДЕЛЯ</text>
+</g>
+<g id="card-online">
+<rect id="card-online-bg" x="20.5" y="152.5" width="349" height="297" rx="11.5" fill="#ffffff" stroke="#dcdcd7" stroke-width="1"/>
+<text id="label-podklyucheno-odnovremenno" x="36" y="179.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#6b6b68">ПОДКЛЮЧЕНО ОДНОВРЕМЕННО</text>
+<g id="chart">
+<rect x="36" y="303.09" width="4.67" height="10.91" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="42.67" y="303.09" width="4.67" height="10.91" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="49.33" y="311" width="4.67" height="3" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="56" y="311" width="4.67" height="3" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="62.67" y="311" width="4.67" height="3" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="69.33" y="311" width="4.67" height="3" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="76" y="311" width="4.67" height="3" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="82.67" y="303.09" width="4.67" height="10.91" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="89.33" y="303.09" width="4.67" height="10.91" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="96" y="292.18" width="4.67" height="21.82" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="102.67" y="281.27" width="4.67" height="32.73" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="109.33" y="270.36" width="4.67" height="43.64" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="116" y="259.45" width="4.67" height="54.55" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="122.67" y="248.55" width="4.67" height="65.45" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="129.33" y="259.45" width="4.67" height="54.55" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="136" y="259.45" width="4.67" height="54.55" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="142.67" y="248.55" width="4.67" height="65.45" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="149.33" y="237.64" width="4.67" height="76.36" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="156" y="226.73" width="4.67" height="87.27" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="162.67" y="226.73" width="4.67" height="87.27" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="169.33" y="237.64" width="4.67" height="76.36" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="176" y="248.55" width="4.67" height="65.45" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="182.67" y="248.55" width="4.67" height="65.45" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="189.33" y="237.64" width="4.67" height="76.36" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="196" y="226.73" width="4.67" height="87.27" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="202.67" y="215.82" width="4.67" height="98.18" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="209.33" y="215.82" width="4.67" height="98.18" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="216" y="226.73" width="4.67" height="87.27" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="222.67" y="237.64" width="4.67" height="76.36" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="229.33" y="237.64" width="4.67" height="76.36" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="236" y="248.55" width="4.67" height="65.45" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="242.67" y="248.55" width="4.67" height="65.45" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="249.33" y="237.64" width="4.67" height="76.36" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="256" y="226.73" width="4.67" height="87.27" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="262.67" y="215.82" width="4.67" height="98.18" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="269.33" y="204.91" width="4.67" height="109.09" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="276" y="194" width="4.67" height="120" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="282.67" y="204.91" width="4.67" height="109.09" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="289.33" y="215.82" width="4.67" height="98.18" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="296" y="226.73" width="4.67" height="87.27" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="302.67" y="237.64" width="4.67" height="76.36" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="309.33" y="248.55" width="4.67" height="65.45" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="316" y="259.45" width="4.67" height="54.55" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="322.67" y="259.45" width="4.67" height="54.55" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="329.33" y="270.36" width="4.67" height="43.64" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="336" y="270.36" width="4.67" height="43.64" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="342.67" y="259.45" width="4.67" height="54.55" rx="1" fill="#111111" opacity="0.8"/>
+<rect x="349.33" y="237.64" width="4.67" height="76.36" rx="1" fill="#d71921" opacity="1"/>
+</g>
+<text x="36" y="341.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#6b6b68">СЕЙЧАС</text>
+<text x="354" y="344.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" text-anchor="end" fill="#111111">7</text>
+<text x="36" y="368.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#6b6b68">МАКСИМУМ</text>
+<text x="354" y="371.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" text-anchor="end" fill="#111111">11</text>
+<text x="36" y="395.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#6b6b68">МИНИМУМ</text>
+<text x="354" y="398.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" text-anchor="end" fill="#111111">0</text>
+<text x="36" y="422.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#6b6b68">ПОСЛЕДНИЙ ЗАМЕР</text>
+<text x="354" y="425.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" text-anchor="end" fill="#111111">24.11.2026 15:20</text>
+</g>
+<text x="20" y="480.2" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" fill="#6b6b68">Метрики хранятся в базе на сервере и</text>
+<text x="20" y="501.2" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" fill="#6b6b68">собираются автоматически.</text>
+<g id="tab-bar">
+<rect id="tab-bar-bg" x="0" y="762" width="390" height="82" fill="#ffffff"/>
+<rect id="tab-bar-border" x="0" y="762" width="390" height="1" fill="#dcdcd7"/>
+<g id="tab-service">
+<circle cx="39" cy="777" r="3" fill="none"/>
+<text x="39" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#6b6b68">СЕРВИС</text>
+</g>
+<g id="tab-keys">
+<circle cx="117" cy="777" r="3" fill="none"/>
+<text x="117" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#6b6b68">КЛЮЧИ</text>
+</g>
+<g id="tab-stats">
+<circle cx="195" cy="777" r="3" fill="#d71921"/>
+<text x="195" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#111111">СТАТИСТИКА</text>
+</g>
+<g id="tab-users">
+<circle cx="273" cy="777" r="3" fill="none"/>
+<text x="273" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#6b6b68">ЛЮДИ</text>
+</g>
+<g id="tab-settings">
+<circle cx="351" cy="777" r="3" fill="none"/>
+<text x="351" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#6b6b68">ЕЩЁ</text>
+</g>
+</g>
+</svg>

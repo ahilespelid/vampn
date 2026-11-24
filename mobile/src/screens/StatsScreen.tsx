@@ -5,7 +5,8 @@ import type {StatPoint} from '../api';
 import {useAuth} from '../auth';
 import {describeError, formatDate} from '../format';
 import {useTheme} from '../theme';
-import {Body, Card, Empty, KV, Label, Notice, Page, Segmented} from '../ui';
+import {useReconnect} from '../useReconnect';
+import {Body, Card, Empty, ErrorNote, KV, Label, Page, Segmented} from '../ui';
 
 const RANGES = [
   {value: '24', label: 'сутки'},
@@ -54,6 +55,8 @@ export function StatsScreen() {
     load();
   }, [load]);
 
+  useReconnect(load);
+
   const bars = downsample(points);
   const peak = bars.length ? Math.max(...bars, 1) : 1;
   const values = points.map(p => p.value);
@@ -62,11 +65,11 @@ export function StatsScreen() {
   return (
     <Page title="статистика" refreshing={loading} onRefresh={load}>
       <Segmented value={range} onChange={setRange} options={RANGES.map(r => ({value: r.value, label: r.label}))} />
-      {error ? <Notice kind="error" text={error} /> : null}
+      {error ? <ErrorNote text={error} /> : null}
       <Card style={{gap: 12}}>
         <Label>подключено одновременно</Label>
         {bars.length === 0 ? (
-          <Empty text={loading ? 'Загрузка…' : 'Данных пока нет: сервер ещё не накопил метрики.'} />
+          <Empty text={loading ? 'Загрузка…' : error ? 'Не удалось загрузить данные.' : 'Данных пока нет: сервер ещё не накопил метрики.'} />
         ) : (
           <>
             <View style={{flexDirection: 'row', alignItems: 'flex-end', height: 120, gap: 2}}>

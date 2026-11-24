@@ -5,7 +5,8 @@ import type {ManagedUser, Role, UserEvent} from '../api';
 import {useAuth} from '../auth';
 import {describeError, eventLabel, formatDate, roleLabel, sourceLabel, validEmail, validName} from '../format';
 import {KeyActions} from '../KeyActions';
-import {Body, Btn, Card, Empty, Field, KV, Label, Notice, Page, Pill, Segmented, Sheet} from '../ui';
+import {useReconnect} from '../useReconnect';
+import {Body, Btn, Card, Empty, ErrorNote, Field, KV, Label, Notice, Page, Pill, Segmented, Sheet} from '../ui';
 
 function AddUser({onDone}: {onDone: () => void}) {
   const {api} = useAuth();
@@ -169,6 +170,8 @@ export function UsersScreen() {
     load();
   }, [load]);
 
+  useReconnect(load);
+
   const active = users.filter(u => u.active);
   const revoked = users.filter(u => !u.active);
   const current = users.find(u => u.name === selected) ?? null;
@@ -196,10 +199,10 @@ export function UsersScreen() {
 
   return (
     <Page title="люди" refreshing={loading} onRefresh={load} right={<Btn small title="добавить" onPress={() => setAdding(true)} testID="add-user" />}>
-      {error ? <Notice kind="error" text={error} /> : null}
+      {error ? <ErrorNote text={error} /> : null}
       <KV k="активных" v={String(active.length)} mono />
       {active.map(renderUser)}
-      {users.length === 0 && !loading ? <Empty text="Список пуст" /> : null}
+      {users.length === 0 && !loading && !error ? <Empty text="Список пуст" /> : null}
       {revoked.length > 0 ? <Label style={{marginTop: 8}}>отозванные · {revoked.length}</Label> : null}
       {revoked.map(renderUser)}
 

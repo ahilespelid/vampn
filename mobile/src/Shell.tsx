@@ -3,6 +3,7 @@ import {Pressable, Text, View} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 import {useAuth} from './auth';
+import {OfflineBar} from './OfflineBar';
 import {HomeScreen} from './screens/HomeScreen';
 import {KeysScreen} from './screens/KeysScreen';
 import {SettingsScreen} from './screens/SettingsScreen';
@@ -15,11 +16,22 @@ import {useNotifications} from './useNotifications';
 export function Shell() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
-  const {api, user} = useAuth();
+  const {api, user, link, checkLink} = useAuth();
   const tabs = tabsFor(user?.role ?? 'user');
   const [active, setActive] = useState<TabId>('service');
+  const [checking, setChecking] = useState(false);
   const notes = useNotifications(api, true);
   const tab = tabs.some(item => item.id === active) ? active : 'service';
+
+  // «Повторить»: запрос к серверу; если связь вернулась, экраны сами загрузят данные заново.
+  const retry = async () => {
+    setChecking(true);
+    try {
+      await checkLink();
+    } finally {
+      setChecking(false);
+    }
+  };
 
   return (
     <View style={{flex: 1, backgroundColor: t.bg}}>
@@ -30,6 +42,8 @@ export function Shell() {
         {tab === 'users' ? <UsersScreen /> : null}
         {tab === 'settings' ? <SettingsScreen /> : null}
       </View>
+
+      {link !== 'ok' ? <OfflineBar link={link} busy={checking} onRetry={retry} /> : null}
 
       {notes.banner ? (
         <Pressable

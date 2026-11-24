@@ -6,7 +6,8 @@ import {useAuth} from '../auth';
 import {describeError, formatDate, keyReasonLabel, notificationStatus} from '../format';
 import {KeyActions} from '../KeyActions';
 import type {NotificationsState} from '../useNotifications';
-import {Body, Card, Empty, Label, Notice, Page, Pill, Segmented} from '../ui';
+import {useReconnect} from '../useReconnect';
+import {Body, Card, Empty, ErrorNote, Label, Page, Pill, Segmented} from '../ui';
 
 export function KeysScreen({notes}: {notes: NotificationsState}) {
   const {api, user} = useAuth();
@@ -35,11 +36,13 @@ export function KeysScreen({notes}: {notes: NotificationsState}) {
     load();
   }, [load]);
 
+  useReconnect(load);
+
   const accounts = user?.accounts ?? [];
 
   return (
     <Page title="ключи" refreshing={loading} onRefresh={load}>
-      {error ? <Notice kind="error" text={error} /> : null}
+      {error ? <ErrorNote text={error} /> : null}
 
       <Label>мои ключи</Label>
       {accounts.map(account => (
@@ -96,7 +99,7 @@ export function KeysScreen({notes}: {notes: NotificationsState}) {
           ]}
         />
       ) : null}
-      {keys.length === 0 ? <Empty text="Выдач ещё не было" /> : null}
+      {keys.length === 0 && !error ? <Empty text="Выдач ещё не было" /> : null}
       {keys.map(k => (
         <Card key={k.id} style={{gap: 4}}>
           <View style={{flexDirection: 'row', justifyContent: 'space-between'}}>

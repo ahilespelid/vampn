@@ -1,5 +1,10 @@
 export const DEFAULT_API_URL = 'https://vamp.new.litewms.ru';
 
+/** Состояние связи с сервером по итогам последнего запроса. */
+export type LinkState = 'ok' | 'network' | 'timeout';
+export const NETWORK_MESSAGE = 'Нет связи с сервером';
+export const TIMEOUT_MESSAGE = 'Сервер не отвечает';
+
 export type Role = 'admin' | 'user';
 export type Account = {name: string; role: Role};
 export type SessionUser = {email: string; role: Role; accounts: Account[]};
@@ -97,6 +102,8 @@ type Options = {
   baseUrl: string;
   getToken: () => string | null;
   onUnauthorized?: () => void;
+  /** Вызывается после каждого запроса: ответ получен (даже с ошибкой) или связи нет. */
+  onLink?: (state: LinkState) => void;
   fetchImpl?: typeof fetch;
 };
 
@@ -109,12 +116,14 @@ export class ApiClient {
   private baseUrl: string;
   private getToken: () => string | null;
   private onUnauthorized?: () => void;
+  private onLink?: (state: LinkState) => void;
   private fetchImpl?: typeof fetch;
 
   constructor(options: Options) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.getToken = options.getToken;
     this.onUnauthorized = options.onUnauthorized;
+    this.onLink = options.onLink;
     this.fetchImpl = options.fetchImpl;
   }
 
@@ -144,14 +153,19 @@ export class ApiClient {
       });
     } catch (error) {
       const aborted = error instanceof Error && error.name === 'AbortError';
+      this.onLink?.(aborted ? 'timeout' : 'network');
       throw new ApiError(
         0,
         aborted ? 'timeout' : 'network',
-        aborted ? 'Сервер не отвечает' : 'Нет связи с сервером',
+        aborted ? TIMEOUT_MESSAGE : NETWORK_MESSAGE,
       );
     } finally {
       clearTimeout(timer);
     }
+
+    // Шлюз (Caddy) отвечает 502–504, когда сам API не работает: для человека это «сервер не отвечает».
+    const gateway = response.status >= 502 && response.status <= 504;
+    this.onLink?.(gateway ? 'timeout' : 'ok');
 
     const text = await response.text();
     let data: Record<string, unknown> | null = null;
@@ -170,7 +184,13 @@ export class ApiClient {
       const validation = Array.isArray(extra.detail);
       const code = typeof extra.error === 'string' ? extra.error : validation ? 'validation' : `http_${response.status}`;
       const message =
-        typeof extra.message === 'string' ? extra.message : validation ? 'Неверные данные' : `Ошибка ${response.status}`;
+        typeof extra.message === 'string'
+          ? extra.message
+          : validation
+          ? 'Неверные данные'
+          : gateway
+          ? TIMEOUT_MESSAGE
+          : `Ошибка ${response.status}`;
       if (response.status === 401 && auth && code === 'unauthorized') {
         this.onUnauthorized?.();
       }

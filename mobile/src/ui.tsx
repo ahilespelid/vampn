@@ -17,6 +17,8 @@ import {
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
+import {NETWORK_MESSAGE, TIMEOUT_MESSAGE} from './api';
+import {useAuth} from './auth';
 import {useTheme} from './theme';
 import type {Tone} from './format';
 
@@ -175,6 +177,18 @@ export function Notice({kind, text}: {kind: 'error' | 'info'; text: string}) {
       <Text style={{color: t.text, fontFamily: t.font.sans, fontSize: 14, lineHeight: 20, flex: 1}}>{text}</Text>
     </View>
   );
+}
+
+/**
+ * Ошибка загрузки на экране. О пропавшей связи уже говорит плашка «нет сети»,
+ * поэтому такое же сообщение второй раз не показывается.
+ */
+export function ErrorNote({text}: {text: string}) {
+  const {link} = useAuth();
+  if (link !== 'ok' && (text === NETWORK_MESSAGE || text === TIMEOUT_MESSAGE)) {
+    return null;
+  }
+  return <Notice kind="error" text={text} />;
 }
 
 export function Segmented<T extends string>({

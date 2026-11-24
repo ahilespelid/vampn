@@ -1,7 +1,7 @@
 import {createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {Platform} from 'react-native';
 
-import {ApiClient, normalizeBaseUrl, type SessionUser} from './api';
+import {ApiClient, normalizeBaseUrl, type LinkState, type SessionUser} from './api';
 import {defaultAppState, loadAppState, saveAppState, type AppState} from './appStore';
 import type {ThemeMode} from './theme';
 
@@ -11,6 +11,12 @@ type AuthValue = {
   themeMode: ThemeMode;
   user: SessionUser | null;
   api: ApiClient;
+  /** Связь с сервером по итогам последнего запроса. */
+  link: LinkState;
+  /** Сколько раз связь возвращалась после обрыва: экраны по этому счётчику загружают данные заново. */
+  reconnects: number;
+  /** Проверяет связь запросом к серверу; результат попадает в `link`. */
+  checkLink: () => Promise<void>;
   requestCode: (email: string) => Promise<void>;
   verifyCode: (email: string, code: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -35,7 +41,25 @@ function deviceInfo() {
 export function AuthProvider({children}: {children: ReactNode}) {
   const [state, setState] = useState<AppState>(defaultAppState);
   const [ready, setReady] = useState(false);
+  const [link, setLink] = useState<LinkState>('ok');
+  const [reconnects, setReconnects] = useState(0);
+  const linkRef = useRef<LinkState>('ok');
   const stateRef = useRef<AppState>(defaultAppState);
+
+  // Итог каждого запроса к серверу. Возврат связи после обрыва считается, чтобы экраны перезагрузились сами.
+  const handleLink = useCallback((next: LinkState) => {
+    if (linkRef.current !== 'ok' && next === 'ok') {
+      setReconnects(count => count + 1);
+    }
+    linkRef.current = next;
+    setLink(next);
+  }, []);
+
+  // Сброс без отсчёта возврата: при выходе и смене сервера прежнее состояние связи не нужно.
+  const resetLink = useCallback(() => {
+    linkRef.current = 'ok';
+    setLink('ok');
+  }, []);
 
   const commit = useCallback((next: AppState) => {
     stateRef.current = next;
@@ -44,8 +68,9 @@ export function AuthProvider({children}: {children: ReactNode}) {
   }, []);
 
   const clearSession = useCallback(() => {
+    resetLink();
     commit({...stateRef.current, token: null, expiresAt: null, user: null});
-  }, [commit]);
+  }, [commit, resetLink]);
 
   const api = useMemo(
     () =>
@@ -53,9 +78,18 @@ export function AuthProvider({children}: {children: ReactNode}) {
         baseUrl: state.apiUrl,
         getToken: () => stateRef.current.token,
         onUnauthorized: clearSession,
+        onLink: handleLink,
       }),
-    [state.apiUrl, clearSession],
+    [state.apiUrl, clearSession, handleLink],
   );
+
+  const checkLink = useCallback(async () => {
+    try {
+      await api.health();
+    } catch {
+      // состояние связи обновит сам клиент
+    }
+  }, [api]);
 
   useEffect(() => {
     let active = true;
@@ -79,6 +113,7 @@ export function AuthProvider({children}: {children: ReactNode}) {
         baseUrl: loaded.apiUrl,
         getToken: () => stateRef.current.token,
         onUnauthorized: clearSession,
+        onLink: handleLink,
       });
       try {
         const me = await client.me();
@@ -92,7 +127,7 @@ export function AuthProvider({children}: {children: ReactNode}) {
     return () => {
       active = false;
     };
-  }, [clearSession, commit]);
+  }, [clearSession, commit, handleLink]);
 
   const requestCode = useCallback(
     async (email: string) => {
@@ -132,11 +167,12 @@ export function AuthProvider({children}: {children: ReactNode}) {
             // старый сервер может быть недоступен
           }
         }
+        resetLink();
         commit({...stateRef.current, apiUrl: normalized, token: null, expiresAt: null, user: null});
       }
       return normalized;
     },
-    [api, commit],
+    [api, commit, resetLink],
   );
 
   const setThemeMode = useCallback(
@@ -153,13 +189,30 @@ export function AuthProvider({children}: {children: ReactNode}) {
       themeMode: state.themeMode,
       user: state.user,
       api,
+      link,
+      reconnects,
+      checkLink,
       requestCode,
       verifyCode,
       signOut,
       setApiUrl,
       setThemeMode,
     }),
-    [ready, state.apiUrl, state.themeMode, state.user, api, requestCode, verifyCode, signOut, setApiUrl, setThemeMode],
+    [
+      ready,
+      state.apiUrl,
+      state.themeMode,
+      state.user,
+      api,
+      link,
+      reconnects,
+      checkLink,
+      requestCode,
+      verifyCode,
+      signOut,
+      setApiUrl,
+      setThemeMode,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

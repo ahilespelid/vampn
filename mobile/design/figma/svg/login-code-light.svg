@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844">
+<title>vampn / login-code / light</title>
+<rect id="background" x="0" y="0" width="390" height="844" fill="#f4f4f2"/>
+<g id="status-bar">
+<text x="32" y="31" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" font-weight="600" fill="#111111">9:41</text>
+<rect x="326.5" y="20.5" width="24" height="11" rx="3.5" fill="none" stroke="#6b6b68" stroke-width="1"/>
+<rect x="328" y="22" width="17" height="8" rx="2" fill="#111111"/>
+<rect x="352" y="24" width="2" height="4" rx="1" fill="#6b6b68"/>
+</g>
+<g id="logo">
+<circle id="logo-dot" cx="30" cy="121.5" r="6" fill="#d71921"/>
+<text id="logo-text" x="46" y="138.22" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="44" font-weight="700" letter-spacing="1" fill="#111111">vampn</text>
+</g>
+<text x="24" y="174.2" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" fill="#6b6b68">Код отправлен на name@example.com. Он</text>
+<text x="24" y="195.2" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" fill="#6b6b68">действует 10 минут.</text>
+<text id="label-kod-iz-pisma" x="24" y="235.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#6b6b68">КОД ИЗ ПИСЬМА</text>
+<g id="field-kod-iz-pisma">
+<rect x="24.5" y="244.5" width="341" height="59" rx="11.5" fill="#ffffff" stroke="#dcdcd7" stroke-width="1"/>
+<text x="195" y="284" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="28" letter-spacing="10" text-anchor="middle" fill="#111111">4821</text>
+</g>
+<g id="button-voyti">
+<rect x="24" y="318" width="342" height="52" rx="24" fill="#111111"/>
+<text x="195" y="349.04" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="14" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#ffffff">ВОЙТИ</text>
+</g>
+<g id="button-drugaya-pochta">
+<rect x="24.5" y="384.5" width="165" height="39" rx="23.5" fill="none" stroke="#dcdcd7" stroke-width="1"/>
+<text x="107" y="408.32" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#111111">ДРУГАЯ ПОЧТА</text>
+</g>
+<g id="button-kod-esche-raz-24" opacity="0.45">
+<rect x="200.5" y="384.5" width="165" height="39" rx="23.5" fill="none" stroke="#dcdcd7" stroke-width="1"/>
+<text x="283" y="408.32" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#111111">КОД ЕЩЁ РАЗ · 24</text>
+</g>
+</svg>

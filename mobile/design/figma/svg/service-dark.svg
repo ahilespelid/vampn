@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844">
+<title>vampn / service / dark</title>
+<rect id="background" x="0" y="0" width="390" height="844" fill="#000000"/>
+<g id="status-bar">
+<text x="32" y="31" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" font-weight="600" fill="#f4f4f2">9:41</text>
+<rect x="326.5" y="20.5" width="24" height="11" rx="3.5" fill="none" stroke="#8d8d8a" stroke-width="1"/>
+<rect x="328" y="22" width="17" height="8" rx="2" fill="#f4f4f2"/>
+<rect x="352" y="24" width="2" height="4" rx="1" fill="#8d8d8a"/>
+</g>
+<g id="header">
+<text id="title" x="20" y="80.38" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="26" font-weight="700" letter-spacing="0.5" fill="#f4f4f2">сервис</text>
+</g>
+<g id="card-address">
+<rect id="card-address-bg" x="20.5" y="98.5" width="349" height="296" rx="11.5" fill="#121212" stroke="#2a2a2a" stroke-width="1"/>
+<text id="label-smena-adresa" x="36" y="125.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#8d8d8a">СМЕНА АДРЕСА</text>
+<text x="36" y="158.2" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" fill="#8d8d8a">Если VPN перестал работать, смените IP</text>
+<text x="36" y="179.2" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" fill="#8d8d8a">сервера. Обычно сторож делает это сам,</text>
+<text x="36" y="200.2" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" fill="#8d8d8a">кнопка нужна для ручного запуска.</text>
+<g id="segmented-esli-zablokirovan">
+<rect id="segmented-bg" x="36" y="219" width="318" height="40" rx="24" fill="#1c1c1c"/>
+<rect x="40" y="223" width="153" height="32" rx="20" fill="#f4f4f2"/>
+<text x="116.5" y="243.56" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" letter-spacing="0.8" text-anchor="middle" fill="#000000">ЕСЛИ ЗАБЛОКИРОВАН</text>
+<text x="273.5" y="243.56" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" letter-spacing="0.8" text-anchor="middle" fill="#f4f4f2">ПРИНУДИТЕЛЬНО</text>
+</g>
+<g id="button-smenit-ip">
+<rect x="36" y="273" width="318" height="52" rx="24" fill="#d71921"/>
+<text x="195" y="304.04" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="14" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#ffffff">СМЕНИТЬ IP</text>
+</g>
+<g id="button-perezagruzit">
+<rect x="36.5" y="339.5" width="153" height="39" rx="23.5" fill="none" stroke="#2a2a2a" stroke-width="1"/>
+<text x="113" y="363.32" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#f4f4f2">ПЕРЕЗАГРУЗИТЬ</text>
+</g>
+<g id="button-o-servere">
+<rect x="200.5" y="339.5" width="153" height="39" rx="23.5" fill="none" stroke="#2a2a2a" stroke-width="1"/>
+<text x="277" y="363.32" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#f4f4f2">О СЕРВЕРЕ</text>
+</g>
+</g>
+<g id="card-status">
+<rect id="card-status-bg" x="20.5" y="409.5" width="349" height="110" rx="11.5" fill="#121212" stroke="#2a2a2a" stroke-width="1"/>
+<text id="label-sostoyanie" x="36" y="436.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#8d8d8a">СОСТОЯНИЕ</text>
+<text x="36" y="461.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" fill="#f4f4f2">сторож: работает</text>
+<text x="36" y="480.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" fill="#f4f4f2">туннель: поднят, рукопожатие 12 с назад</text>
+<text x="36" y="499.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" fill="#f4f4f2">адрес: 203.0.113.10</text>
+</g>
+<g id="card-emergency">
+<rect id="card-emergency-bg" x="20.5" y="534.5" width="349" height="128" rx="11.5" fill="#121212" stroke="#2a2a2a" stroke-width="1"/>
+<text id="label-avariynyy-kanal" x="36" y="561.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#8d8d8a">АВАРИЙНЫЙ КАНАЛ</text>
+<text x="36" y="590.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" fill="#f4f4f2">выключен</text>
+<g id="button-vklyuchit">
+<rect x="36.5" y="607.5" width="99" height="39" rx="23.5" fill="none" stroke="#2a2a2a" stroke-width="1"/>
+<text x="86" y="631.32" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#f4f4f2">ВКЛЮЧИТЬ</text>
+</g>
+<g id="button-vyklyuchit">
+<rect x="146.5" y="607.5" width="107" height="39" rx="23.5" fill="none" stroke="#2a2a2a" stroke-width="1"/>
+<text x="200" y="631.32" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#f4f4f2">ВЫКЛЮЧИТЬ</text>
+</g>
+</g>
+<g id="tab-bar">
+<rect id="tab-bar-bg" x="0" y="762" width="390" height="82" fill="#121212"/>
+<rect id="tab-bar-border" x="0" y="762" width="390" height="1" fill="#2a2a2a"/>
+<g id="tab-service">
+<circle cx="39" cy="777" r="3" fill="#d71921"/>
+<text x="39" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#f4f4f2">СЕРВИС</text>
+</g>
+<g id="tab-keys">
+<circle cx="117" cy="777" r="3" fill="none"/>
+<text x="117" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#8d8d8a">КЛЮЧИ</text>
+</g>
+<g id="tab-stats">
+<circle cx="195" cy="777" r="3" fill="none"/>
+<text x="195" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#8d8d8a">СТАТИСТИКА</text>
+</g>
+<g id="tab-users">
+<circle cx="273" cy="777" r="3" fill="none"/>
+<text x="273" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#8d8d8a">ЛЮДИ</text>
+</g>
+<g id="tab-settings">
+<circle cx="351" cy="777" r="3" fill="none"/>
+<text x="351" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#8d8d8a">ЕЩЁ</text>
+</g>
+</g>
+</svg>

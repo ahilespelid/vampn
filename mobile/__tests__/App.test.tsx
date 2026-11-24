@@ -198,3 +198,60 @@ test('отказ сервера (401) сбрасывает сохранённу�
   expect(hasTestId(renderer, 'login-email')).toBe(true);
   await act(async () => renderer.unmount());
 });
+
+test('нет сети: плашка с «повторить», сессия остаётся, после возврата связи экран загружается сам', async () => {
+  mockServer('user');
+  let renderer = await mount();
+  await signIn(renderer);
+  await act(async () => renderer.unmount());
+
+  (globalThis as {fetch: typeof fetch}).fetch = jest.fn(async () => {
+    throw new TypeError('Network request failed');
+  }) as unknown as typeof fetch;
+
+  renderer = await mount();
+  await flush();
+  await flush();
+
+  expect(hasTestId(renderer, 'tab-service')).toBe(true);
+  expect(hasTestId(renderer, 'offline-bar')).toBe(true);
+  const offline = textOf(renderer.toJSON());
+  // о потере связи говорит одна плашка, экран свою ошибку не дублирует
+  expect(offline.split('Нет связи с сервером').length - 1).toBe(1);
+  expect(offline).not.toContain('watcher: ok');
+
+  // связь вернулась: «повторить» проверяет сервер (ответ 404 тоже ответ), плашка уходит, данные грузятся заново
+  mockServer('user');
+  await act(async () => {
+    byTestId(renderer, 'offline-retry', 'onPress').props.onPress();
+  });
+  await flush();
+  await flush();
+
+  expect(hasTestId(renderer, 'offline-bar')).toBe(false);
+  expect(textOf(renderer.toJSON())).toContain('watcher: ok');
+  await act(async () => renderer.unmount());
+});
+
+test('сервер отвечает 502: плашка «не отвечает», вход остаётся', async () => {
+  mockServer('user');
+  let renderer = await mount();
+  await signIn(renderer);
+  await act(async () => renderer.unmount());
+
+  (globalThis as {fetch: typeof fetch}).fetch = jest.fn(async () => ({
+    ok: false,
+    status: 502,
+    text: async () => '<html>Bad gateway</html>',
+    headers: {get: () => null},
+  })) as unknown as typeof fetch;
+
+  renderer = await mount();
+  await flush();
+  await flush();
+
+  expect(hasTestId(renderer, 'tab-service')).toBe(true);
+  expect(hasTestId(renderer, 'offline-bar')).toBe(true);
+  expect(textOf(renderer.toJSON())).toContain('Сервер не отвечает');
+  await act(async () => renderer.unmount());
+});

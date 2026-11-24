@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844">
+<title>vampn / keys / dark</title>
+<rect id="background" x="0" y="0" width="390" height="844" fill="#000000"/>
+<g id="status-bar">
+<text x="32" y="31" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" font-weight="600" fill="#f4f4f2">9:41</text>
+<rect x="326.5" y="20.5" width="24" height="11" rx="3.5" fill="none" stroke="#8d8d8a" stroke-width="1"/>
+<rect x="328" y="22" width="17" height="8" rx="2" fill="#f4f4f2"/>
+<rect x="352" y="24" width="2" height="4" rx="1" fill="#8d8d8a"/>
+</g>
+<g id="header">
+<text id="title" x="20" y="80.38" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="26" font-weight="700" letter-spacing="0.5" fill="#f4f4f2">ключи</text>
+</g>
+<text id="label-moi-klyuchi" x="20" y="109.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#8d8d8a">МОИ КЛЮЧИ</text>
+<g id="card-key-ahilespelid">
+<rect id="card-key-ahilespelid-bg" x="20.5" y="126.5" width="349" height="151" rx="11.5" fill="#121212" stroke="#2a2a2a" stroke-width="1"/>
+<text x="36" y="156.94" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" font-weight="700" fill="#f4f4f2">ahilespelid</text>
+<g id="pill-superadmin">
+<rect x="264.5" y="142.5" width="89" height="19" rx="9.5" fill="none" stroke="#d71921" stroke-width="1"/>
+<text x="274" y="155.6" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="1" fill="#d71921">СУПЕРАДМИН</text>
+</g>
+<g id="button-poluchit-ssylku">
+<rect x="36" y="174" width="157" height="40" rx="24" fill="#f4f4f2"/>
+<text x="114.5" y="198.32" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#000000">ПОЛУЧИТЬ ССЫЛКУ</text>
+</g>
+<g id="button-na-pochtu">
+<rect x="201.5" y="174.5" width="99" height="39" rx="23.5" fill="none" stroke="#2a2a2a" stroke-width="1"/>
+<text x="251" y="198.32" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#f4f4f2">НА ПОЧТУ</text>
+</g>
+<g id="button-perevypustit">
+<rect x="36.5" y="222.5" width="140" height="39" rx="23.5" fill="none" stroke="#2a2a2a" stroke-width="1"/>
+<text x="106.5" y="246.32" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#f4f4f2">ПЕРЕВЫПУСТИТЬ</text>
+</g>
+</g>
+<text id="label-uvedomleniya-novyh-1" x="20" y="311.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#8d8d8a">УВЕДОМЛЕНИЯ · НОВЫХ 1</text>
+<g id="card-notification">
+<rect id="card-notification-bg" x="20.5" y="328.5" width="349" height="131" rx="11.5" fill="#121212" stroke="#d71921" stroke-width="1"/>
+<text x="36" y="360.2" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" font-weight="600" fill="#f4f4f2">Новый ключ для ahilespelid</text>
+<g id="pill-na-pochte">
+<rect x="278.5" y="344.5" width="75" height="19" rx="9.5" fill="none" stroke="#8d8d8a" stroke-width="1"/>
+<text x="288" y="357.6" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="1" fill="#8d8d8a">НА ПОЧТЕ</text>
+</g>
+<text x="36" y="389.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" fill="#8d8d8a">ahilespelid · 24.11.2026 15:21</text>
+<g id="button-poluchit-ssylku-2">
+<rect x="36" y="404" width="157" height="40" rx="24" fill="#f4f4f2"/>
+<text x="114.5" y="428.32" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#000000">ПОЛУЧИТЬ ССЫЛКУ</text>
+</g>
+</g>
+<text id="label-istoriya-vydachi" x="20" y="493.18" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="11" letter-spacing="1.4" fill="#8d8d8a">ИСТОРИЯ ВЫДАЧИ</text>
+<g id="segmented-moi">
+<rect id="segmented-bg" x="20" y="510" width="350" height="40" rx="24" fill="#1c1c1c"/>
+<rect x="24" y="514" width="169" height="32" rx="20" fill="#f4f4f2"/>
+<text x="108.5" y="534.56" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" letter-spacing="0.8" text-anchor="middle" fill="#000000">МОИ</text>
+<text x="281.5" y="534.56" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="12" letter-spacing="0.8" text-anchor="middle" fill="#f4f4f2">ВСЕ</text>
+</g>
+<g id="card-history-1">
+<rect id="card-history-1-bg" x="20.5" y="564.5" width="349" height="73" rx="11.5" fill="#121212" stroke="#2a2a2a" stroke-width="1"/>
+<text x="36" y="594.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" font-weight="700" fill="#f4f4f2">ahilespelid</text>
+<text x="354" y="594.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" text-anchor="end" fill="#8d8d8a">выдан</text>
+<text x="36" y="617.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" fill="#8d8d8a">24.11.2026 15:21 · system</text>
+</g>
+<g id="card-history-2">
+<rect id="card-history-2-bg" x="20.5" y="652.5" width="349" height="73" rx="11.5" fill="#121212" stroke="#2a2a2a" stroke-width="1"/>
+<text x="36" y="682.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" font-weight="700" fill="#f4f4f2">ahilespelid</text>
+<text x="354" y="682.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" text-anchor="end" fill="#8d8d8a">отправлен повторно</text>
+<text x="36" y="705.44" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="13" fill="#8d8d8a">12.11.2026 09:40 · ahilespelid</text>
+</g>
+<g id="tab-bar">
+<rect id="tab-bar-bg" x="0" y="762" width="390" height="82" fill="#121212"/>
+<rect id="tab-bar-border" x="0" y="762" width="390" height="1" fill="#2a2a2a"/>
+<g id="tab-service">
+<circle cx="39" cy="777" r="3" fill="none"/>
+<text x="39" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#8d8d8a">СЕРВИС</text>
+</g>
+<g id="tab-keys">
+<circle cx="117" cy="777" r="3" fill="#d71921"/>
+<text x="117" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#f4f4f2">КЛЮЧИ 1</text>
+</g>
+<g id="tab-stats">
+<circle cx="195" cy="777" r="3" fill="none"/>
+<text x="195" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#8d8d8a">СТАТИСТИКА</text>
+</g>
+<g id="tab-users">
+<circle cx="273" cy="777" r="3" fill="none"/>
+<text x="273" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#8d8d8a">ЛЮДИ</text>
+</g>
+<g id="tab-settings">
+<circle cx="351" cy="777" r="3" fill="none"/>
+<text x="351" y="795.3" font-family="Menlo, 'SF Mono', Consolas, 'Courier New', monospace" font-size="10" letter-spacing="0.8" text-anchor="middle" fill="#8d8d8a">ЕЩЁ</text>
+</g>
+</g>
+</svg>

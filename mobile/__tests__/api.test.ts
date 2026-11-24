@@ -1,4 +1,4 @@
-import {ApiClient, ApiError, DEFAULT_API_URL, normalizeBaseUrl} from '../src/api';
+import {ApiClient, ApiError, DEFAULT_API_URL, NETWORK_MESSAGE, normalizeBaseUrl, TIMEOUT_MESSAGE} from '../src/api';
 
 type Reply = {status?: number; body?: unknown; headers?: Record<string, string>; text?: string};
 
@@ -120,5 +120,64 @@ describe('ApiClient', () => {
     const {api} = client(() => ({text: '<html>oops</html>'}));
     const error = (await api.status().catch(e => e)) as ApiError;
     expect(error.code).toBe('bad_response');
+  });
+});
+
+describe('связь с сервером', () => {
+  const answer = (status: number, text = '{}') =>
+    (async () => ({
+      ok: status < 300,
+      status,
+      text: async () => text,
+      headers: {get: () => null},
+    })) as unknown as typeof fetch;
+
+  const failing = (error: Error) =>
+    (async () => {
+      throw error;
+    }) as unknown as typeof fetch;
+
+  function probe(impl: typeof fetch) {
+    const states: string[] = [];
+    const api = new ApiClient({
+      baseUrl: 'https://x.example.com',
+      getToken: () => 'tok',
+      onLink: state => states.push(state),
+      fetchImpl: impl,
+    });
+    return {api, states};
+  }
+
+  test('любой ответ сервера, даже с ошибкой, значит, что связь есть', async () => {
+    const fine = probe(answer(200));
+    await fine.api.status();
+    const denied = probe(answer(401, JSON.stringify({error: 'invalid_code', message: 'x'})));
+    await denied.api.me().catch(() => undefined);
+    expect(fine.states).toEqual(['ok']);
+    expect(denied.states).toEqual(['ok']);
+  });
+
+  test('обрыв сети и таймаут сообщаются с понятным текстом', async () => {
+    const offline = probe(failing(new TypeError('Network request failed')));
+    const noNet = (await offline.api.status().catch(e => e)) as ApiError;
+    expect(offline.states).toEqual(['network']);
+    expect(noNet.code).toBe('network');
+    expect(noNet.message).toBe(NETWORK_MESSAGE);
+
+    const aborted = new Error('aborted');
+    aborted.name = 'AbortError';
+    const slow = probe(failing(aborted));
+    const noAnswer = (await slow.api.status().catch(e => e)) as ApiError;
+    expect(slow.states).toEqual(['timeout']);
+    expect(noAnswer.code).toBe('timeout');
+    expect(noAnswer.message).toBe(TIMEOUT_MESSAGE);
+  });
+
+  test('502–504 от шлюза: сервер не отвечает, а не «ошибка 502»', async () => {
+    const gateway = probe(answer(502, '<html>Bad gateway</html>'));
+    const error = (await gateway.api.status().catch(e => e)) as ApiError;
+    expect(gateway.states).toEqual(['timeout']);
+    expect(error.status).toBe(502);
+    expect(error.message).toBe(TIMEOUT_MESSAGE);
   });
 });

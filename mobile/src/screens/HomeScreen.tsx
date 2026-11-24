@@ -3,7 +3,8 @@ import {Alert, View} from 'react-native';
 
 import {useAuth} from '../auth';
 import {describeError} from '../format';
-import {Body, Btn, Card, Label, Notice, Page, Segmented, Sheet} from '../ui';
+import {useReconnect} from '../useReconnect';
+import {Body, Btn, Card, ErrorNote, Label, Page, Segmented, Sheet} from '../ui';
 
 type Result = {title: string; text: string} | null;
 
@@ -35,6 +36,8 @@ export function HomeScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useReconnect(load);
 
   const act = async (id: string, title: string, job: () => Promise<{text: string}>) => {
     setBusy(id);
@@ -83,7 +86,7 @@ export function HomeScreen() {
 
   return (
     <Page title="сервис" refreshing={loading} onRefresh={load}>
-      {error ? <Notice kind="error" text={error} /> : null}
+      {error ? <ErrorNote text={error} /> : null}
 
       <Card style={{gap: 14}}>
         <Label>смена адреса</Label>
