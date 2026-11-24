@@ -164,6 +164,11 @@ class FakeStore:
     def list_notifications(self, user_ids, limit=100):
         return [{kk: v for kk, v in n.items() if kk != "user_id"} for n in reversed(self.notifs) if n["user_id"] in user_ids][:limit]
 
+    def notifications_signature(self, user_ids):
+        rows = [n for n in list(self.notifs) if n["user_id"] in user_ids]
+        return (len(rows), max((n["id"] for n in rows), default=0)) + tuple(
+            len([n for n in rows if n[f]]) for f in NOTIF_FIELDS)
+
     def mark_notification(self, nid, user_ids, field, now):
         if field not in NOTIF_FIELDS:
             return False

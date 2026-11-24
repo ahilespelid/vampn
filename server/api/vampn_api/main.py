@@ -3,7 +3,7 @@ from datetime import timedelta
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import commands, security
@@ -12,6 +12,7 @@ from .config import Settings, load_settings
 from .errors import ApiError, BadRequest, Conflict, Forbidden, NotFound
 from .mailer import NullPush, SmtpMailer
 from .store import MySQLStore, utcnow
+from .stream import notification_stream
 
 log = logging.getLogger("vampn_api")
 
@@ -219,6 +220,26 @@ def create_app(settings: Optional[Settings] = None, store=None, mailer=None, run
         return {"notifications": [dict(r, email_sent_at=iso(r["email_sent_at"]), push_sent_at=iso(r["push_sent_at"]),
                                        delivered_at=iso(r["delivered_at"]), read_at=iso(r["read_at"]),
                                        created_at=iso(r["created_at"])) for r in rows]}
+
+    @app.get("/v1/notifications/stream")
+    async def notifications_stream(p: Principal = Depends(current)):
+        """SSE: открытое приложение получает событие `changed` и сразу перечитывает /v1/notifications."""
+        ids, token = list(p.ids), p.token
+
+        def still_valid() -> bool:
+            try:
+                auth.authenticate(token)
+                return True
+            except ApiError:
+                return False
+
+        stream = notification_stream(
+            lambda: store.notifications_signature(ids), still_valid,
+            poll=s.stream_poll_seconds, heartbeat=s.stream_heartbeat_seconds,
+            recheck=s.stream_recheck_seconds, max_seconds=s.stream_max_seconds)
+        # X-Accel-Buffering и no-cache: прокси не должны копить кадры; Caddy сбрасывает text/event-stream сам
+        return StreamingResponse(stream, media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.post("/v1/notifications/{nid}/delivered")
     def notif_delivered(nid: int, p: Principal = Depends(current)):

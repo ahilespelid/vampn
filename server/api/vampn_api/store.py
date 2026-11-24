@@ -194,6 +194,16 @@ class MySQLStore:
                          "n.delivered_at,n.read_at,n.created_at FROM notifications n JOIN users u ON u.id=n.user_id "
                          "WHERE n.user_id IN (" + _in(len(user_ids)) + ") ORDER BY n.id DESC LIMIT %s", (*user_ids, limit))
 
+    def notifications_signature(self, user_ids):
+        """Дешёвый отпечаток уведомлений пользователя для потока SSE: меняется, когда уведомление появилось
+        или у какого-то из них заполнилась отметка (почта, push, доставлено, прочитано). Поля только заполняются."""
+        if not user_ids:
+            return (0, 0, 0, 0, 0, 0)
+        r = self._one("SELECT COUNT(*) AS n, COALESCE(MAX(id),0) AS last_id, COUNT(email_sent_at) AS e, "
+                      "COUNT(push_sent_at) AS p, COUNT(delivered_at) AS d, COUNT(read_at) AS r "
+                      "FROM notifications WHERE user_id IN (" + _in(len(user_ids)) + ")", tuple(user_ids))
+        return (r["n"], r["last_id"], r["e"], r["p"], r["d"], r["r"])
+
     def mark_notification(self, notif_id, user_ids, field, now):
         if field not in NOTIF_FIELDS or not user_ids:
             return False

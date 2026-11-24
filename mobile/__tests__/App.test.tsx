@@ -4,13 +4,57 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React from 'react';
+import {Alert} from 'react-native';
 import ReactTestRenderer, {act} from 'react-test-renderer';
 
 import App from '../App';
 
 type Route = {status?: number; body: unknown};
 
+/** Подмена XMLHttpRequest для потока уведомлений: тест сам «присылает» кадры. */
+class StreamXhr {
+  url = '';
+  headers: Record<string, string> = {};
+  status = 0;
+  readyState = 0;
+  responseText = '';
+  timeout = -1;
+  aborted = false;
+  onreadystatechange: (() => void) | null = null;
+  onprogress: (() => void) | null = null;
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  ontimeout: (() => void) | null = null;
+  onabort: (() => void) | null = null;
+
+  open(_method: string, url: string) {
+    this.url = url;
+  }
+  setRequestHeader(name: string, value: string) {
+    this.headers[name] = value;
+  }
+  send() {}
+  abort() {
+    this.aborted = true;
+  }
+  push(chunk: string) {
+    this.status = 200;
+    this.readyState = 3;
+    this.responseText += chunk;
+    this.onreadystatechange?.();
+    this.onprogress?.();
+  }
+}
+
+let streams: StreamXhr[] = [];
+
 function mockServer(role: 'admin' | 'user') {
+  streams = [];
+  (globalThis as unknown as {XMLHttpRequest: unknown}).XMLHttpRequest = function () {
+    const xhr = new StreamXhr();
+    streams.push(xhr);
+    return xhr;
+  };
   const log: {path: string; method: string; auth?: string}[] = [];
   const accounts = [{name: role === 'admin' ? 'ahilespelid' : 'griga', role}];
   const routes: Record<string, Route> = {
@@ -145,6 +189,52 @@ test('обычный пользователь: после кода вкладк�
   // защищённые запросы идут с токеном, вход без него
   expect(log.find(call => call.path === '/v1/auth/verify')?.auth).toBeUndefined();
   expect(log.find(call => call.path === '/v1/status')?.auth).toBe('Bearer tok-1');
+  await act(async () => renderer.unmount());
+});
+
+test('после входа открывается поток уведомлений с токеном; ready и changed перечитывают список', async () => {
+  const log = mockServer('user');
+  const renderer = await mount();
+  await signIn(renderer);
+
+  expect(streams).toHaveLength(1);
+  expect(streams[0].url).toBe('https://vamp.new.litewms.ru/v1/notifications/stream');
+  expect(streams[0].headers.Authorization).toBe('Bearer tok-1');
+  const loads = () => log.filter(call => call.path === '/v1/notifications').length;
+
+  const initial = loads();
+  await act(async () => streams[0].push('retry: 3000\n\nevent: ready\ndata: {}\n\n'));
+  await flush();
+  expect(loads()).toBe(initial + 1);
+  await act(async () => streams[0].push(': ping\n\nevent: changed\ndata: {}\n\n'));
+  await flush();
+  expect(loads()).toBe(initial + 2);
+
+  await act(async () => renderer.unmount());
+  expect(streams[0].aborted).toBe(true);
+});
+
+test('выход из сессии закрывает поток уведомлений', async () => {
+  mockServer('user');
+  const renderer = await mount();
+  await signIn(renderer);
+  await act(async () => {
+    byTestId(renderer, 'tab-settings', 'onPress').props.onPress();
+  });
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  await act(async () => {
+    byTestId(renderer, 'logout', 'onPress').props.onPress();
+  });
+  // выход спрашивает подтверждение: нажимаем «Выйти» в окне
+  const confirm = alert.mock.calls[0][2]?.find(button => button.text === 'Выйти');
+  await act(async () => {
+    confirm?.onPress?.();
+  });
+  await flush();
+  await flush();
+  alert.mockRestore();
+  expect(hasTestId(renderer, 'login-email')).toBe(true);
+  expect(streams[0].aborted).toBe(true);
   await act(async () => renderer.unmount());
 });
 

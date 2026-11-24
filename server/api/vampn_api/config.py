@@ -6,6 +6,10 @@ def _int(env, name, default):
     return int(env.get(name, default))
 
 
+def _float(env, name, default):
+    return float(env.get(name, default))
+
+
 @dataclass(frozen=True)
 class Settings:
     db_host: str = "127.0.0.1"
@@ -29,6 +33,11 @@ class Settings:
     codes_per_hour: int = 3
     ip_fail_limit: int = 20
     session_days: int = 30
+    # поток уведомлений (SSE): как часто сверять базу, как часто слать «пинг», как часто проверять сессию, когда закрывать
+    stream_poll_seconds: float = 3.0
+    stream_heartbeat_seconds: float = 15.0
+    stream_recheck_seconds: float = 30.0
+    stream_max_seconds: float = 1800.0
     # публичная ссылка на приложение/магазин не нужна; поле для будущего
     extra: dict = field(default_factory=dict)
 
@@ -57,4 +66,8 @@ def load_settings(env=None) -> Settings:
         codes_per_hour=_int(env, "CODES_PER_HOUR", 3),
         ip_fail_limit=_int(env, "IP_FAIL_LIMIT", 20),
         session_days=_int(env, "SESSION_DAYS", 30),
+        stream_poll_seconds=_float(env, "STREAM_POLL_SECONDS", 3.0),
+        stream_heartbeat_seconds=_float(env, "STREAM_HEARTBEAT_SECONDS", 15.0),
+        stream_recheck_seconds=_float(env, "STREAM_RECHECK_SECONDS", 30.0),
+        stream_max_seconds=_float(env, "STREAM_MAX_SECONDS", 1800.0),
     )

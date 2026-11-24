@@ -1,3 +1,6 @@
+import {openEventStream} from './sse';
+import type {StreamEnd, StreamHandle} from './sse';
+
 export const DEFAULT_API_URL = 'https://vamp.new.litewms.ru';
 
 /** Состояние связи с сервером по итогам последнего запроса. */
@@ -105,6 +108,13 @@ type Options = {
   /** Вызывается после каждого запроса: ответ получен (даже с ошибкой) или связи нет. */
   onLink?: (state: LinkState) => void;
   fetchImpl?: typeof fetch;
+  xhrFactory?: () => XMLHttpRequest;
+};
+
+export type NotificationStreamHandlers = {
+  onOpen?: () => void;
+  onEvent: (event: string) => void;
+  onEnd: (end: StreamEnd) => void;
 };
 
 type RequestOptions = {body?: unknown; auth?: boolean; timeoutMs?: number};
@@ -118,6 +128,7 @@ export class ApiClient {
   private onUnauthorized?: () => void;
   private onLink?: (state: LinkState) => void;
   private fetchImpl?: typeof fetch;
+  private xhrFactory?: () => XMLHttpRequest;
 
   constructor(options: Options) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
@@ -125,6 +136,7 @@ export class ApiClient {
     this.onUnauthorized = options.onUnauthorized;
     this.onLink = options.onLink;
     this.fetchImpl = options.fetchImpl;
+    this.xhrFactory = options.xhrFactory;
   }
 
   private async request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
@@ -277,6 +289,19 @@ export class ApiClient {
 
   notifications() {
     return this.request<{notifications: AppNotification[]}>('GET', '/v1/notifications');
+  }
+
+  /** Живой поток уведомлений (SSE): сервер шлёт `changed`, когда список изменился. Закрывается через close(). */
+  notificationStream(handlers: NotificationStreamHandlers): StreamHandle {
+    const token = this.getToken();
+    return openEventStream({
+      url: `${this.baseUrl}/v1/notifications/stream`,
+      headers: token ? {Authorization: `Bearer ${token}`} : {},
+      onOpen: handlers.onOpen,
+      onEvent: event => handlers.onEvent(event),
+      onEnd: handlers.onEnd,
+      xhrFactory: this.xhrFactory,
+    });
   }
 
   markDelivered(id: number) {
