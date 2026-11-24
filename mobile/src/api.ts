@@ -103,7 +103,7 @@ type Options = {
 type RequestOptions = {body?: unknown; auth?: boolean; timeoutMs?: number};
 
 const DEFAULT_TIMEOUT_MS = 20000;
-const CONTROL_TIMEOUT_MS = 150000;
+const CONTROL_TIMEOUT_MS = 440000; // сервер ждёт команду до 420 с
 
 export class ApiClient {
   private baseUrl: string;

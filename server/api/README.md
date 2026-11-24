@@ -41,13 +41,14 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 VAMPN_TEST_DB=127.0.0.1:3399:vampn:pass:vampn_test .venv/bin/pytest -q   # + интеграционные (очищает тестовую базу!)
 ```
 
-Боевой запуск (пример файлов в `deploy/`, на сервер ставится только после отдельного подтверждения):
-пользователь `vampn`, окружение `/etc/vampn-api/api.env` (см. `.env.example`), служба `vampn-api.service`,
-правило `/etc/sudoers.d/vampn-api`, сайт `vamp.new.litewms.ru` в Caddy.
+Боевой запуск (файлы в `deploy/`, так стоит на homeserv): пользователь `vampn`, окружение `/etc/vampn-api/api.env` (см. `.env.example`),
+служба `vampn-api.service`, правило `/etc/sudoers.d/vampn-api`, сайт `vamp.new.litewms.ru` в Caddy.
+`deploy/install.sh` ставит всё одним запуском от root (архив кода кладётся в `/root/vampn-api-src.tar`), секреты берёт из файлов на сервере.
+Caddy работает в Docker, поэтому API слушает адрес шлюза сети `litewms_net`, а не 127.0.0.1. `deploy/caddy-dns-fix.sh` чинил DNS в контейнере Caddy (без него не выпускались сертификаты).
+Сборщик метрик для статистики: `../metrics`.
 
 ## Что ещё не сделано
 
 - Push через Firebase (Android) и APNs (iOS): сейчас `NullPush`; для iOS нужна подпись Apple Developer.
-- Сбор метрик в таблицу `metrics` (таймер читает `vampn list/status` и пишет точки).
 - Живые уведомления при открытом приложении (сейчас опрос `GET /notifications`).
 - Telegram-сообщение при блокировке входа (хук `on_lockout` уже есть).
