@@ -1,311 +1,144 @@
 import {useCallback, useEffect, useState} from 'react';
-import {
-  ActivityIndicator,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {Alert, View} from 'react-native';
 
-import {
-  actionLabel,
-  buttonLabel,
-  showsOfflineStatus,
-  type ActionMode,
-  type NetState,
-} from '../buttonState';
-import {callAgent} from '../agent';
-import {loadConfig, saveConfig} from '../storage';
-import {pingTelegram} from '../telegram';
-import type {AppTheme} from '../theme';
+import {useAuth} from '../auth';
+import {describeError} from '../format';
+import {Body, Btn, Card, Label, Notice, Page, Segmented, Sheet} from '../ui';
 
-type Props = {
-  theme: AppTheme;
-  onOpenSettings: () => void;
-  onToggleTheme: () => void;
-};
+type Result = {title: string; text: string} | null;
 
-function commandOutput(raw: string): string {
-  try {
-    const parsed = JSON.parse(raw) as {output?: unknown};
-    if (typeof parsed.output === 'string' && parsed.output.length > 0) {
-      return parsed.output;
+export function HomeScreen() {
+  const {api, user} = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [status, setStatus] = useState('');
+  const [emergency, setEmergency] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
+  const [mode, setMode] = useState<'rotate' | 'force'>('rotate');
+  const [result, setResult] = useState<Result>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [s, e] = await Promise.all([api.status(), isAdmin ? api.emergency('status') : Promise.resolve(null)]);
+      setStatus(s.text.trim());
+      setEmergency(e ? e.text.trim() : '');
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setLoading(false);
     }
-  } catch {
-    // The agent can also return plain text.
-  }
-  return raw;
-}
-
-export function HomeScreen({theme, onOpenSettings, onToggleTheme}: Props) {
-  const insets = useSafeAreaInsets();
-  const [net, setNet] = useState<NetState>('unknown');
-  const [mode, setMode] = useState<ActionMode>('rotate');
-  const [busy, setBusy] = useState(false);
-  const [detail, setDetail] = useState('');
-  const [resultOpen, setResultOpen] = useState(false);
-  const [resultText, setResultText] = useState('');
-
-  const refresh = useCallback(async (notify: boolean) => {
-    const config = await loadConfig();
-    const online = await pingTelegram(config, {notify});
-    setNet(online ? 'online' : 'offline');
-    return {config, online};
-  }, []);
+  }, [api, isAdmin]);
 
   useEffect(() => {
-    let active = true;
-    refresh(false)
-      .then(result => {
-        if (active && result) {
-          setMode(result.config.actionMode === 'force' ? 'force' : 'rotate');
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setNet('offline');
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [refresh]);
+    load();
+  }, [load]);
 
-  const chooseMode = async (next: ActionMode) => {
-    setMode(next);
-    const config = await loadConfig();
-    await saveConfig({...config, actionMode: next});
-  };
-
-  const onPress = async () => {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setDetail('');
+  const act = async (id: string, title: string, job: () => Promise<{text: string}>) => {
+    setBusy(id);
+    setError('');
     try {
-      const config = await loadConfig();
-      const online = await pingTelegram(config, {notify: mode !== 'force'});
-      setNet(online ? 'online' : 'offline');
-      const output = await callAgent({...config, actionMode: mode}, mode);
-      setDetail(output);
-      setResultText(commandOutput(output));
-      setResultOpen(true);
-    } catch (error) {
-      setDetail(error instanceof Error ? error.message : 'Ошибка');
+      const out = await job();
+      setResult({title, text: out.text.trim() || 'Готово'});
+      load();
+    } catch (err) {
+      setError(describeError(err));
     } finally {
-      setBusy(false);
+      setBusy('');
     }
   };
 
-  const label = buttonLabel(net, busy);
-  const offline = showsOfflineStatus(net, busy);
+  const rotate = () => {
+    const force = mode === 'force';
+    const go = () => act('rotate', force ? 'Смена IP (принудительно)' : 'Смена IP', () => api.rotate(force));
+    if (force) {
+      Alert.alert('Сменить IP принудительно?', 'Адрес сервера сменится сразу, даже если он не заблокирован. Все подключённые получат новые ключи.', [
+        {text: 'Отмена', style: 'cancel'},
+        {text: 'Сменить', style: 'destructive', onPress: go},
+      ]);
+    } else {
+      go();
+    }
+  };
+
+  const reboot = () => {
+    const go = (hard: boolean) => act('reboot', hard ? 'Жёсткая перезагрузка' : 'Перезагрузка', () => api.reboot(hard));
+    Alert.alert('Перезагрузить VPN-сервер?', 'Подключение пропадёт на пару минут.', [
+      {text: 'Отмена', style: 'cancel'},
+      {text: 'Перезагрузить', style: 'destructive', onPress: () => go(false)},
+      ...(isAdmin ? [{text: 'Жёстко', style: 'destructive' as const, onPress: () => go(true)}] : []),
+    ]);
+  };
+
+  const showServer = () => act('server', 'Сервер', () => api.server());
+
+  const setEmergencyMode = (value: 'on' | 'off') => {
+    Alert.alert(value === 'on' ? 'Включить аварийный канал?' : 'Выключить аварийный канал?', '', [
+      {text: 'Отмена', style: 'cancel'},
+      {text: 'Да', onPress: () => act('emergency', 'Аварийный канал', () => api.emergency(value))},
+    ]);
+  };
 
   return (
-    <View
-      style={[
-        styles.screen,
-        {backgroundColor: theme.background, paddingTop: insets.top, paddingBottom: insets.bottom},
-      ]}>
-      <View style={styles.topBar}>
-        <Pressable
-          onPress={onToggleTheme}
-          style={[styles.invert, {backgroundColor: theme.button}]}
-          hitSlop={8}>
-          <Text style={[styles.invertText, {color: theme.buttonText}]}>инверсия</Text>
-        </Pressable>
-        <Pressable onPress={onOpenSettings} hitSlop={12}>
-          <Text style={[styles.settingsText, {color: theme.muted}]}>настройки</Text>
-        </Pressable>
-      </View>
-      <View style={styles.center}>
-        <Text style={[styles.wordmark, {color: theme.text}]}>vampn</Text>
-        <View style={[styles.modes, {backgroundColor: theme.surface, borderColor: theme.border}]}>
-          {(['rotate', 'force'] as ActionMode[]).map(item => {
-            const selected = mode === item;
-            return (
-              <Pressable
-                key={item}
-                onPress={() => chooseMode(item)}
-                style={[
-                  styles.mode,
-                  {
-                    backgroundColor: selected ? theme.button : 'transparent',
-                  },
-                ]}>
-                <Text style={[styles.modeText, {color: selected ? theme.buttonText : theme.text}]}>
-                  {actionLabel(item)}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={offline ? 'нет интернет' : label}
-          onPress={onPress}
-          style={[
-            styles.button,
-            {backgroundColor: offline ? theme.accent : theme.button},
-          ]}>
-          {busy ? <ActivityIndicator color={theme.buttonText} /> : null}
-          <Text style={[styles.buttonText, {color: theme.buttonText}]}>{label}</Text>
-        </Pressable>
-        {offline ? (
-          <Text style={[styles.status, {color: theme.accent}]}>нет интернет</Text>
+    <Page title="сервис" refreshing={loading} onRefresh={load}>
+      {error ? <Notice kind="error" text={error} /> : null}
+
+      <Card style={{gap: 14}}>
+        <Label>смена адреса</Label>
+        <Body muted>Если VPN перестал работать, смените IP сервера. Обычно сторож делает это сам, кнопка нужна для ручного запуска.</Body>
+        {isAdmin ? (
+          <Segmented
+            value={mode}
+            onChange={setMode}
+            options={[
+              {value: 'rotate', label: 'если заблокирован'},
+              {value: 'force', label: 'принудительно'},
+            ]}
+          />
         ) : null}
-        {detail ? (
-          <ScrollView
-            style={[styles.log, {backgroundColor: theme.surface, borderColor: theme.border}]}
-            contentContainerStyle={styles.logContent}>
-            <Text selectable style={[styles.logText, {color: theme.muted}]}>
-              {detail}
-            </Text>
-          </ScrollView>
-        ) : null}
-      </View>
-      <Modal
-        visible={resultOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setResultOpen(false)}>
-        <View style={[styles.modalBackdrop, {backgroundColor: theme.backdrop}]}>
-          <View style={[styles.modalCard, {backgroundColor: theme.surface}]}>
-            <Text style={[styles.modalTitle, {color: theme.text}]}>Результат</Text>
-            <ScrollView style={styles.modalScroll}>
-              <Text selectable style={[styles.modalText, {color: theme.muted}]}>
-                {resultText}
-              </Text>
-            </ScrollView>
-            <Pressable
-              style={[styles.modalClose, {backgroundColor: theme.button}]}
-              onPress={() => setResultOpen(false)}>
-              <Text style={[styles.modalCloseText, {color: theme.buttonText}]}>Закрыть</Text>
-            </Pressable>
+        <Btn testID="rotate" kind="signal" title="сменить IP" onPress={rotate} busy={busy === 'rotate'} disabled={!!busy} />
+        <View style={{flexDirection: 'row', gap: 10}}>
+          <View style={{flex: 1}}>
+            <Btn small kind="ghost" title="перезагрузить" onPress={reboot} busy={busy === 'reboot'} disabled={!!busy} />
+          </View>
+          <View style={{flex: 1}}>
+            <Btn small kind="ghost" title="о сервере" onPress={showServer} busy={busy === 'server'} disabled={!!busy} />
           </View>
         </View>
-      </Modal>
-    </View>
+      </Card>
+
+      <Card style={{gap: 8}}>
+        <Label>состояние</Label>
+        {status ? (
+          <Body mono selectable>
+            {status}
+          </Body>
+        ) : (
+          <Body muted>{loading ? 'Загрузка…' : 'Нет данных'}</Body>
+        )}
+      </Card>
+
+      {isAdmin ? (
+        <Card style={{gap: 12}}>
+          <Label>аварийный канал</Label>
+          <Body mono>{emergency || (loading ? 'Загрузка…' : 'Нет данных')}</Body>
+          <View style={{flexDirection: 'row', gap: 10}}>
+            <Btn small kind="ghost" title="включить" onPress={() => setEmergencyMode('on')} disabled={!!busy} />
+            <Btn small kind="ghost" title="выключить" onPress={() => setEmergencyMode('off')} disabled={!!busy} />
+          </View>
+        </Card>
+      ) : null}
+
+      <Sheet visible={!!result} onClose={() => setResult(null)} title={result?.title ?? ''}>
+        <Card>
+          <Body mono selectable>
+            {result?.text ?? ''}
+          </Body>
+        </Card>
+        <Btn title="закрыть" onPress={() => setResult(null)} />
+      </Sheet>
+    </Page>
   );
 }
-
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    paddingHorizontal: 20,
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 8,
-  },
-  invert: {
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  invertText: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  settingsText: {
-    fontSize: 15,
-  },
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  wordmark: {
-    fontSize: 40,
-    fontWeight: '700',
-    marginBottom: 22,
-  },
-  modes: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderRadius: 999,
-    padding: 4,
-    marginBottom: 28,
-  },
-  mode: {
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  modeText: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  button: {
-    width: 280,
-    minHeight: 92,
-    borderRadius: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 22,
-  },
-  buttonText: {
-    fontSize: 26,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  status: {
-    marginTop: 18,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  log: {
-    maxHeight: 140,
-    marginTop: 18,
-    alignSelf: 'stretch',
-    borderWidth: 1,
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  logContent: {
-    paddingBottom: 4,
-  },
-  logText: {
-    fontSize: 13,
-    fontFamily: 'monospace',
-  },
-  modalBackdrop: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 24,
-  },
-  modalCard: {
-    borderRadius: 20,
-    padding: 16,
-    maxHeight: '70%',
-  },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: '700',
-    marginBottom: 12,
-  },
-  modalScroll: {
-    maxHeight: 280,
-  },
-  modalText: {
-    fontSize: 13,
-    fontFamily: 'monospace',
-  },
-  modalClose: {
-    marginTop: 14,
-    borderRadius: 999,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  modalCloseText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-});

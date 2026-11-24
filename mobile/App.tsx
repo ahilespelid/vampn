@@ -1,38 +1,42 @@
-import {useState} from 'react';
-import {StatusBar, StyleSheet, View} from 'react-native';
+import {ActivityIndicator, StatusBar, View, useColorScheme} from 'react-native';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 
-import {HomeScreen} from './src/screens/HomeScreen';
-import {SettingsScreen} from './src/screens/SettingsScreen';
-import {themeFor} from './src/theme';
+import {AuthProvider, useAuth} from './src/auth';
+import {LoginScreen} from './src/screens/LoginScreen';
+import {Shell} from './src/Shell';
+import {resolveTheme, ThemeContext} from './src/theme';
 
-function App() {
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [inverted, setInverted] = useState(false);
-  const theme = themeFor(inverted);
+function Root() {
+  const auth = useAuth();
+  const system = useColorScheme();
+  const theme = resolveTheme(auth.themeMode, system === 'dark');
 
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={inverted ? 'light-content' : 'dark-content'} />
-      <View style={[styles.root, {backgroundColor: theme.background}]}>
-        {settingsOpen ? (
-          <SettingsScreen theme={theme} onClose={() => setSettingsOpen(false)} />
+    <ThemeContext.Provider value={theme}>
+      <StatusBar barStyle={theme.dark ? 'light-content' : 'dark-content'} />
+      <View style={{flex: 1, backgroundColor: theme.bg}}>
+        {!auth.ready ? (
+          <View style={{flex: 1, alignItems: 'center', justifyContent: 'center'}}>
+            <ActivityIndicator color={theme.muted} />
+          </View>
+        ) : auth.user ? (
+          <Shell />
         ) : (
-          <HomeScreen
-            theme={theme}
-            onOpenSettings={() => setSettingsOpen(true)}
-            onToggleTheme={() => setInverted(value => !value)}
-          />
+          <LoginScreen />
         )}
       </View>
-    </SafeAreaProvider>
+    </ThemeContext.Provider>
   );
 }
 
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-  },
-});
+function App() {
+  return (
+    <SafeAreaProvider>
+      <AuthProvider>
+        <Root />
+      </AuthProvider>
+    </SafeAreaProvider>
+  );
+}
 
 export default App;

@@ -1,60 +1,88 @@
+import {createContext, useContext} from 'react';
+import {Platform} from 'react-native';
+
+export type ThemeMode = 'auto' | 'light' | 'dark';
+
 export type AppTheme = {
-  background: string;
+  dark: boolean;
+  bg: string;
   surface: string;
+  surfaceAlt: string;
   text: string;
   muted: string;
   border: string;
+  signal: string;
+  signalText: string;
+  ok: string;
   button: string;
   buttonText: string;
-  accent: string;
   backdrop: string;
+  radius: {m: number; l: number};
+  font: {sans: string; mono: string; display: string};
 };
 
-const baseTheme: AppTheme = {
-  background: '#f4f4f2',
+// Шрифты проекта support (IBM Plex Sans/Mono, Doto, DotGothic16) подключаются
+// файлами в нативные ресурсы. Пока файлов нет, берём системные шрифты с тем же
+// характером: моноширинный для подписей и заголовков.
+const FONTS_BUNDLED = false;
+
+const fonts = FONTS_BUNDLED
+  ? {sans: 'IBMPlexSans-Regular', mono: 'IBMPlexMono-Regular', display: 'Doto-Bold'}
+  : Platform.select({
+      ios: {sans: 'System', mono: 'Menlo', display: 'Menlo'},
+      default: {sans: 'sans-serif', mono: 'monospace', display: 'monospace'},
+    })!;
+
+const radius = {m: 12, l: 24};
+
+export const lightTheme: AppTheme = {
+  dark: false,
+  bg: '#f4f4f2',
   surface: '#ffffff',
-  text: '#161616',
-  muted: '#6d6d6d',
-  border: '#e4e4e0',
+  surfaceAlt: '#ecece8',
+  text: '#111111',
+  muted: '#6b6b68',
+  border: '#dcdcd7',
+  signal: '#d71921',
+  signalText: '#ffffff',
+  ok: '#1f8f4e',
   button: '#111111',
   buttonText: '#ffffff',
-  accent: '#ef7d1a',
-  backdrop: 'rgba(22, 22, 22, 0.35)',
+  backdrop: 'rgba(0, 0, 0, 0.4)',
+  radius,
+  font: fonts,
 };
 
-function invertHex(color: string): string {
-  const hex = color.slice(1);
-  const channels = [0, 2, 4].map(start =>
-    (255 - parseInt(hex.slice(start, start + 2), 16)).toString(16).padStart(2, '0'),
-  );
-  return `#${channels.join('')}`;
+export const darkTheme: AppTheme = {
+  dark: true,
+  bg: '#000000',
+  surface: '#121212',
+  surfaceAlt: '#1c1c1c',
+  text: '#f4f4f2',
+  muted: '#8d8d8a',
+  border: '#2a2a2a',
+  signal: '#d71921',
+  signalText: '#ffffff',
+  ok: '#3ecf7a',
+  button: '#f4f4f2',
+  buttonText: '#000000',
+  backdrop: 'rgba(0, 0, 0, 0.65)',
+  radius,
+  font: fonts,
+};
+
+export function resolveTheme(mode: ThemeMode, systemDark: boolean): AppTheme {
+  if (mode === 'light') {
+    return lightTheme;
+  }
+  if (mode === 'dark') {
+    return darkTheme;
+  }
+  return systemDark ? darkTheme : lightTheme;
 }
 
-function invertColor(color: string): string {
-  if (color.startsWith('#')) {
-    return invertHex(color);
-  }
-  const parts = color.match(/[\d.]+/g);
-  if (!parts || parts.length < 3) {
-    return color;
-  }
-  const [red, green, blue, alpha = '1'] = parts;
-  return `rgba(${255 - Number(red)}, ${255 - Number(green)}, ${255 - Number(blue)}, ${alpha})`;
-}
+export const ThemeContext = createContext<AppTheme>(lightTheme);
 
-export function themeFor(inverted: boolean): AppTheme {
-  if (!inverted) {
-    return baseTheme;
-  }
-  return {
-    background: invertColor(baseTheme.background),
-    surface: invertColor(baseTheme.surface),
-    text: invertColor(baseTheme.text),
-    muted: invertColor(baseTheme.muted),
-    border: invertColor(baseTheme.border),
-    button: invertColor(baseTheme.button),
-    buttonText: invertColor(baseTheme.buttonText),
-    accent: invertColor(baseTheme.accent),
-    backdrop: invertColor(baseTheme.backdrop),
-  };
+export function useTheme(): AppTheme {
+  return useContext(ThemeContext);
 }

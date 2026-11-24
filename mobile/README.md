@@ -1,11 +1,18 @@
 # vampn
 
-One large button.
+Мобильное приложение для пользователей VPN vampn.
 
-- While Telegram answers, the button says **есть интернет**. Pressing it runs the SSH commands from settings.
-- When Telegram cannot be reached, the caption says **нет интернет** and the button says **сбросить IP**. Pressing it runs the reset commands.
+- **Вход по коду.** Приложение спрашивает почту, на неё приходит код из 4 цифр (10 минут, 6 попыток, затем блокировка на час). Входят только те, чья почта есть в списке пользователей vampn.
+- **Роли.** Суперадмин (`ahilespelid`) видит список пользователей, добавляет и отзывает их, меняет IP принудительно и управляет аварийным каналом. Обычный пользователь видит статистику, управляет службой (смена IP, перезагрузка), получает свои ключи и уведомления. Списка пользователей у него нет.
+- **Ключи.** Новый ключ приходит на почту и в приложение: при закрытом приложении push, при открытом уведомление появляется само. История выдачи и статусы (на почте, доставлено, прочитано) хранятся на сервере.
+- **Оформление** как у проекта support: светлая и тёмная тема (по системе или вручную), красный сигнальный цвет, моноширинные подписи.
+- **Сервер.** Адрес API по умолчанию `https://vamp.new.litewms.ru`; на экране входа и в «ещё» его можно заменить своим.
 
-Settings stores the SSH host, port, user, password or private key, both command lists, and the Telegram bot token and chat id on the device.
+Серверная часть лежит в `../server/api` (FastAPI, база Percona), описание: `../server/api/README.md`.
+
+Не сделано: push-уведомления при закрытом приложении (нужны Firebase для Android и сертификат Apple Developer для iOS), шрифты support (IBM Plex, Doto, DotGothic16) как файлы в нативных ресурсах, точечный фон.
+
+В коде остались прежние модули прямого управления через SSH и Telegram (`src/ssh.ts`, `src/agent.ts`, `src/telegram.ts`, `src/buttonState.ts`, нативный модуль `NativeVampnSsh`). Новые экраны ими не пользуются.
 
 ## Android
 
@@ -46,7 +53,7 @@ command -v git >/dev/null 2>&1 || { apt-get update && apt-get install -y git; };
 
 The script installs Node.js 22 if it is missing, installs dependencies and Expo, and starts the dev server on port 8081. Open the printed `exp://` link in Expo Go on the same phone.
 
-Telegram status and the button work there. SSH does not: Expo Go has no `NativeVampnSsh` module, so the log says the command is available only in the built app.
+Вход, роли, ключи и управление работают и там: им нужен только доступ к API. SSH не работает: в Expo Go нет модуля `NativeVampnSsh`.
 
 ## Tests
 

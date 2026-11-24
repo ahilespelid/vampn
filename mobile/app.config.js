@@ -4,7 +4,7 @@ module.exports = {
   slug: 'vampn',
   version: '1.0.0',
   orientation: 'portrait',
-  userInterfaceStyle: 'dark',
+  userInterfaceStyle: 'automatic',
   newArchEnabled: true,
   android: {
     package: 'com.vampn',
