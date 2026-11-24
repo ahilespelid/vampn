@@ -21,6 +21,13 @@ NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
+# Событие, которое приложение уже записало в историю (source='app') за последние 10 минут:
+# синк не пишет второе такое же при подстройке файла под базу.
+APP_EVENT_WINDOW = 600
+DB_EVENT_KINDS = {"db_created": {"created", "restored"}, "db_restored": {"created", "restored"},
+                  "db_revoked": {"revoked"}, "db_email": {"email_changed"}}
+
+
 def mask(e):
     return "***@" + e.split("@", 1)[1] if e and "@" in e else "***"
 
@@ -68,6 +75,7 @@ def plan(F, D, max_removals=MAX_REMOVALS):
             desired[name] = (True, fe)
             continue
         bp, be = bool(d["in_file"]), d["file_email"]
+        recent = d.get("recent_app") or set()
         fch = (fp != bp) or (fp and fe != be)
         dch = (bool(d["active"]) != bp) or (bool(d["active"]) and d["email"] != be)
         take_db = True
@@ -100,9 +108,11 @@ def plan(F, D, max_removals=MAX_REMOVALS):
                         kind = "db_restored" if d["n_events"] > 0 else "db_created"
                     else:
                         kind = "db_revoked"
-                    P["actions"].append(dict(kind=kind, name=name, new=d["email"], source="db"))
+                    P["actions"].append(dict(kind=kind, name=name, new=d["email"], source="db",
+                                             skip_event=bool(recent & DB_EVENT_KINDS[kind])))
                 elif d["email"] != be:
-                    P["actions"].append(dict(kind="db_email", name=name, old=be, new=d["email"], source="db"))
+                    P["actions"].append(dict(kind="db_email", name=name, old=be, new=d["email"], source="db",
+                                             skip_event=bool(recent & DB_EVENT_KINDS["db_email"])))
             desired[name] = (bool(d["active"]), d["email"])
 
     act = {n for n, (a, _e) in desired.items() if a}
@@ -161,11 +171,15 @@ def q(v):
 
 def load_db():
     rows = sql("SELECT u.id,u.name,u.email,u.active,u.in_file,IFNULL(u.file_email,''),"
-               "(SELECT COUNT(*) FROM user_events e WHERE e.user_id=u.id) FROM users u ORDER BY u.id", fetch=True)
+               "(SELECT COUNT(*) FROM user_events e WHERE e.user_id=u.id),"
+               "IFNULL((SELECT GROUP_CONCAT(DISTINCT e.event) FROM user_events e WHERE e.user_id=u.id AND e.source='app' "
+               "AND e.created_at >= UTC_TIMESTAMP() - INTERVAL %d SECOND),'') "
+               "FROM users u ORDER BY u.id" % APP_EVENT_WINDOW, fetch=True)
     D = {}
     for r in rows:
         D[r[1]] = dict(id=int(r[0]), email=r[2], active=r[3] == "1", in_file=r[4] == "1",
-                       file_email=r[5] or None, n_events=int(r[6]))
+                       file_email=r[5] or None, n_events=int(r[6]),
+                       recent_app=set(x for x in (r[7] if len(r) > 7 else "").split(",") if x))
     return D
 
 
@@ -191,15 +205,19 @@ def phase1_sql(actions):
             s.append("UPDATE users SET email=%s WHERE name=%s;" % (q(a["new"]), q(n)))
             s.append(event_sql(n, "email_changed", a["old"], a["new"], a["source"]))
         elif k == "db_created":
-            s.append(event_sql(n, "created", None, a["new"], "db"))
+            if not a.get("skip_event"):
+                s.append(event_sql(n, "created", None, a["new"], "db"))
         elif k == "db_restored":
             s.append("UPDATE users SET revoked_at=NULL,revoked_reason=NULL WHERE name=%s;" % q(n))
-            s.append(event_sql(n, "restored", None, a["new"], "db"))
+            if not a.get("skip_event"):
+                s.append(event_sql(n, "restored", None, a["new"], "db"))
         elif k == "db_revoked":
             s.append("UPDATE users SET revoked_at=IFNULL(revoked_at,NOW()),revoked_reason=IFNULL(revoked_reason,'revoked_in_db') WHERE name=%s;" % q(n))
-            s.append(event_sql(n, "revoked", None, None, "db"))
+            if not a.get("skip_event"):
+                s.append(event_sql(n, "revoked", None, None, "db"))
         elif k == "db_email":
-            s.append(event_sql(n, "email_changed", a.get("old"), a["new"], "db"))
+            if not a.get("skip_event"):
+                s.append(event_sql(n, "email_changed", a.get("old"), a["new"], "db"))
         elif k == "conflict":
             s.append("INSERT INTO user_events (user_id,event,old_value,new_value,source) SELECT id,'conflict',%s,%s,'system' FROM users WHERE name=%s;"
                      % ("'" + a["old"].replace("'", "") .replace("\\", "") + "'", "'" + a["new"].replace("'", "").replace("\\", "") + "'", q(n)))
@@ -342,9 +360,9 @@ def baseline(conf_path):
 
 
 def selftest():
-    def row(i, name, email, active=True, in_file=True, ev=1):
+    def row(i, name, email, active=True, in_file=True, ev=1, app=()):
         return name, dict(id=i, email=email, active=active, in_file=in_file,
-                          file_email=email if in_file else None, n_events=ev)
+                          file_email=email if in_file else None, n_events=ev, recent_app=set(app))
 
     def base():
         return dict([row(1, "a", "a@x.ru"), row(2, "b", "b@x.ru"), row(3, "c", "c@x.ru")])
@@ -411,6 +429,29 @@ def selftest():
     txt = build_file(["# c"], F, P["final"])
     check("собранный файл: заголовок, пользователи, \\n в конце",
           txt.startswith("# c\n\n") and txt.endswith("\n") and "b@x.ru" not in txt and "d d@x.ru" in txt)
+    skip = lambda P: sorted((a["kind"], a["name"], a.get("skip_event")) for a in P["actions"])
+    D = base(); D.update([row(4, "e", "e@x.ru", True, False, 1, ("created",))])
+    P = plan(Fb(), D)
+    check("пользователя добавило приложение -> файл обновится, второе событие не пишется",
+          skip(P) == [("db_restored", "e", True)] and ("e", "e@x.ru") in P["final"]
+          and "INSERT INTO user_events" not in phase1_sql(P["actions"]))
+    D = base(); D.update([row(4, "e", "e@x.ru", True, False, 0)])
+    P = plan(Fb(), D)
+    check("пользователя добавили прямо в базе -> событие пишется",
+          skip(P) == [("db_created", "e", False)] and "INSERT INTO user_events" in phase1_sql(P["actions"]))
+    D = base(); D["c"]["active"] = False; D["c"]["recent_app"] = {"revoked"}
+    P = plan(Fb(), D)
+    check("отзыв из приложения -> строка уйдёт из файла, второе событие не пишется",
+          skip(P) == [("db_revoked", "c", True)] and "c" not in dict(P["final"])
+          and "INSERT INTO user_events" not in phase1_sql(P["actions"])
+          and "UPDATE users SET revoked_at" in phase1_sql(P["actions"]))
+    D = base(); D["c"]["active"] = False; D["c"]["recent_app"] = {"email_changed"}
+    P = plan(Fb(), D)
+    check("отзыв в базе при свежей смене почты из приложения -> событие отзыва пишется", skip(P) == [("db_revoked", "c", False)])
+    D = base(); D["a"]["email"] = "dbnew@x.ru"; D["a"]["recent_app"] = {"email_changed"}
+    P = plan(Fb(), D)
+    check("почту сменили в приложении -> файл обновится, второе событие не пишется",
+          skip(P) == [("db_email", "a", True)] and dict(P["final"])["a"] == "dbnew@x.ru")
     print("selftest: %s" % ("все проверки пройдены" if not fails else "ОШИБКИ: %d" % len(fails)))
     return 0 if not fails else 1
 
