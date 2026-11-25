@@ -201,15 +201,20 @@ class FakeMailer:
 class FakeRunner:
     def __init__(self):
         self.calls = []
-        self.outputs = {"link": "vpn://TESTLINK"}
+        self.outputs = {"link": "vpn://TESTLINK", "keyconf": "[Interface]\nPrivateKey = TEST\n"}
+        self.codes = {}
+        self.fail = set()  # подкоманды, которые должны упасть
 
     def run_ok(self, sub, arg=""):
         build_argv(sub, arg)  # те же проверки, что в бою
         self.calls.append((sub, arg))
+        if sub in self.fail:
+            from vampn_api.errors import CommandFailed
+            raise CommandFailed("тестовый сбой " + sub)
         return self.outputs.get(sub, "ok " + sub)
 
-    def run(self, sub, arg=""):
-        return Result(0, self.run_ok(sub, arg), "")
+    def run(self, sub, arg="", timeout=0):
+        return Result(self.codes.get(sub, 0), self.run_ok(sub, arg), "")
 
 
 class FakePush:

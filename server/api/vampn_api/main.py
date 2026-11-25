@@ -189,9 +189,13 @@ def create_app(settings: Optional[Settings] = None, store=None, mailer=None, run
     def key_link(name: str, notification_id: Optional[int] = None, p: Principal = Depends(current)):
         acc = account_for(p, name)
         link = commands.extract_link(runner.run_ok("link", acc["name"]))
+        try:  # .conf нужен приложению для QR; если его нет, остаётся одна ссылка
+            conf = runner.run_ok("keyconf", acc["name"]).strip() or None
+        except ApiError:
+            conf = None
         if notification_id:
             store.mark_notification(notification_id, p.ids if not p.is_admin else [acc["id"], *p.ids], "delivered_at", now_fn())
-        return {"name": acc["name"], "link": link}  # ссылка - секрет, в базе не хранится
+        return {"name": acc["name"], "link": link, "conf": conf}  # ссылка и .conf - секреты, в базе не хранятся
 
     @app.post("/v1/keys/{name}/resend")
     def key_resend(name: str, p: Principal = Depends(current)):
@@ -259,6 +263,18 @@ def create_app(settings: Optional[Settings] = None, store=None, mailer=None, run
             raise NotFound("нет такого уведомления")
         store.mark_notification(nid, p.ids, "delivered_at", now)
         return {"ok": True}
+
+    # ---------- суперадмин: рассылка ключей ----------
+    @app.post("/v1/admin/keys/resend-all")
+    def admin_resend_all(_p: Principal = Depends(admin)):
+        r = runner.run("resend-all", timeout=600)  # неушедшим vampn повторяет сам, поэтому до 3-4 минут
+        summary = next((l.strip() for l in reversed(r.out.splitlines()) if l.startswith("ИТОГ")), "")
+        return {"ok": r.code == 0, "summary": summary or (r.err or r.out).strip()[-300:]}
+
+    @app.get("/v1/admin/mail-status")
+    def admin_mail_status(_p: Principal = Depends(admin)):
+        r = runner.run("mailstatus")  # код 1 = у кого-то отправка не удалась; это ответ, а не ошибка API
+        return {"ok": r.code == 0, "text": r.out}
 
     # ---------- суперадмин: пользователи ----------
     @app.get("/v1/admin/users")

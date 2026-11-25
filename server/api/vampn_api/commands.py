@@ -19,11 +19,11 @@ class Result:
 
 def build_argv(sub: str, arg: str = "") -> list:
     """Список аргументов vampn для разрешённой подкоманды; иначе BadRequest."""
-    if sub in ("status", "server", "list"):
+    if sub in ("status", "server", "list", "resend-all", "mailstatus"):
         if arg:
             raise BadRequest("команда без аргументов")
         return [sub]
-    if sub in ("link", "resend", "reissue"):
+    if sub in ("link", "keyconf", "resend", "reissue"):
         if not valid_name(arg):
             raise BadRequest("плохое имя пользователя")
         return [sub, arg]
@@ -46,13 +46,13 @@ class VampnRunner:
     def __init__(self, binary: str, timeout: int = 180, use_sudo: bool = True):
         self.binary, self.timeout, self.use_sudo = binary, timeout, use_sudo
 
-    def run(self, sub: str, arg: str = "") -> Result:
+    def run(self, sub: str, arg: str = "", timeout: int = 0) -> Result:
         argv = build_argv(sub, arg)
         cmd = (["sudo", "-n"] if self.use_sudo else []) + [self.binary] + argv
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout, stdin=subprocess.DEVNULL)
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout or self.timeout, stdin=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:
-            raise CommandFailed("команда не завершилась за %d с" % self.timeout)
+            raise CommandFailed("команда не завершилась за %d с" % (timeout or self.timeout))
         except OSError as exc:
             raise CommandFailed("не удалось запустить vampn: %s" % exc.__class__.__name__)
         clean = lambda s: ANSI_RE.sub("", s)[:MAX_OUTPUT]
