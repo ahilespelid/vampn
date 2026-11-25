@@ -30,7 +30,7 @@
 | `POST /control/rotate`, `POST /control/reboot` | вошедшие (`force` только admin) | смена IP, перезагрузка |
 | `POST /control/emergency` | `status` всем, `on/off` admin | аварийный канал |
 | `GET /keys`, `POST /keys/{name}/link\|resend\|reissue` | свои (admin любые) | ключи и история; `link` отдаёт ключ-токен `vpn://` и `.conf` для QR |
-| `POST /admin/keys/resend-all`, `GET /admin/mail-status` | admin | разослать ключ всем заново; кому и когда ушёл ключ |
+| `POST /admin/keys/resendall`, `GET /admin/mail-status` | admin | разослать ключ всем заново; кому и когда ушёл ключ |
 | `GET /notifications`, `POST /notifications/{id}/delivered\|read` | вошедшие | уведомления |
 | `GET /notifications/stream` | вошедшие | живой поток уведомлений (SSE), см. ниже |
 | `GET /admin/users`, `GET /admin/events`, `POST /admin/users`, `PATCH /admin/users/{name}` | admin | пользователи и история |

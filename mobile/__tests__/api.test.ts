@@ -81,7 +81,7 @@ describe('ApiClient', () => {
   test('рассылка ключей всем: POST с долгим таймаутом, статус рассылки: GET', async () => {
     const a = client(() => ({body: {ok: false, summary: 'ИТОГ: принято 2 из 3, не ушло: b'}}));
     const out = await a.api.adminResendAll();
-    expect(a.calls[0].url).toBe('https://api.example.com/v1/admin/keys/resend-all');
+    expect(a.calls[0].url).toBe('https://api.example.com/v1/admin/keys/resendall');
     expect(a.calls[0].init.method).toBe('POST');
     expect(out).toEqual({ok: false, summary: 'ИТОГ: принято 2 из 3, не ушло: b'});
     const b = client(() => ({body: {ok: true, text: 'ИМЯ ПОЧТА'}}));

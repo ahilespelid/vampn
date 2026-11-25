@@ -19,7 +19,7 @@ class Result:
 
 def build_argv(sub: str, arg: str = "") -> list:
     """Список аргументов vampn для разрешённой подкоманды; иначе BadRequest."""
-    if sub in ("status", "server", "list", "resend-all", "mailstatus"):
+    if sub in ("status", "server", "list", "resendall", "mailstatus"):
         if arg:
             raise BadRequest("команда без аргументов")
         return [sub]

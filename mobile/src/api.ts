@@ -280,7 +280,7 @@ export class ApiClient {
 
   /** Разослать ключ всем заново (суперадмин). Сервер повторяет неушедшие письма сам, поэтому ждём долго. */
   adminResendAll() {
-    return this.request<{ok: boolean; summary: string}>('POST', '/v1/admin/keys/resend-all', {timeoutMs: 300000});
+    return this.request<{ok: boolean; summary: string}>('POST', '/v1/admin/keys/resendall', {timeoutMs: 300000});
   }
 
   /** Кому и когда ушёл ключ, у кого отправка не удалась (суперадмин). */

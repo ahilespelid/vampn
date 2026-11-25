@@ -192,7 +192,7 @@ def test_email_and_role_change_logged(env):
     ("link", "ivan", ["link", "ivan"]), ("reissue", "a.b-c_1", ["reissue", "a.b-c_1"]),
     ("rotate", "", ["rotate"]), ("rotate", "--force", ["rotate", "--force"]),
     ("reboot", "hard", ["reboot", "hard"]), ("emergency", "on", ["emergency", "on"]),
-    ("keyconf", "ivan", ["keyconf", "ivan"]), ("resend-all", "", ["resend-all"]), ("mailstatus", "", ["mailstatus"]),
+    ("keyconf", "ivan", ["keyconf", "ivan"]), ("resendall", "", ["resendall"]), ("mailstatus", "", ["mailstatus"]),
 ])
 def test_allowed_commands(sub, arg, expected):
     assert build_argv(sub, arg) == expected
@@ -202,7 +202,7 @@ def test_allowed_commands(sub, arg, expected):
     ("status", "x"), ("link", ""), ("link", "a b"), ("link", "a;rm"), ("link", "../x"), ("link", "$(id)"),
     ("rotate", "--evil"), ("reboot", "soft"), ("emergency", ""), ("emergency", "maybe"),
     ("mirror", ""), ("users", ""), ("sync", ""), ("bash", ""), ("", ""), ("mailtest", "a@b.ru"),
-    ("resend-all", "x"), ("mailstatus", "x"), ("keyconf", ""), ("keyconf", "a b"), ("keyconf", "$(id)"),
+    ("resendall", "x"), ("mailstatus", "x"), ("keyconf", ""), ("keyconf", "a b"), ("keyconf", "$(id)"),
 ])
 def test_forbidden_commands(sub, arg):
     with pytest.raises(BadRequest):
@@ -233,23 +233,23 @@ def test_key_link_survives_missing_conf(env):
 
 def test_user_cannot_resend_all_or_read_mail_status(env):
     h, _ = env.login("griga@example.com")
-    assert env.client.post("/v1/admin/keys/resend-all", headers=h).status_code == 403
+    assert env.client.post("/v1/admin/keys/resendall", headers=h).status_code == 403
     assert env.client.get("/v1/admin/mail-status", headers=h).status_code == 403
-    assert ("resend-all", "") not in env.runner.calls
+    assert ("resendall", "") not in env.runner.calls
 
 
 def test_admin_resend_all_reports_summary(env):
-    env.runner.outputs["resend-all"] = "  a: принято почтовым сервером\nИТОГ: принято 3 из 3\n"
+    env.runner.outputs["resendall"] = "  a: принято почтовым сервером\nИТОГ: принято 3 из 3\n"
     h, _ = env.login("boss@example.com")
-    r = env.client.post("/v1/admin/keys/resend-all", headers=h)
+    r = env.client.post("/v1/admin/keys/resendall", headers=h)
     assert r.status_code == 200 and r.json() == {"ok": True, "summary": "ИТОГ: принято 3 из 3"}
 
 
 def test_admin_resend_all_partial_failure_is_a_result_not_an_error(env):
-    env.runner.outputs["resend-all"] = "ИТОГ: принято 2 из 3, не ушло: b\n"
-    env.runner.codes["resend-all"] = 1
+    env.runner.outputs["resendall"] = "ИТОГ: принято 2 из 3, не ушло: b\n"
+    env.runner.codes["resendall"] = 1
     h, _ = env.login("boss@example.com")
-    r = env.client.post("/v1/admin/keys/resend-all", headers=h)
+    r = env.client.post("/v1/admin/keys/resendall", headers=h)
     assert r.status_code == 200 and r.json()["ok"] is False and "не ушло: b" in r.json()["summary"]
 
 

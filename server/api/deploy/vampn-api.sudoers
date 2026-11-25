@@ -11,7 +11,7 @@ Cmnd_Alias VAMPN_API = /usr/local/sbin/vampn status, \
                        /usr/local/sbin/vampn emergency off, \
                        /usr/local/sbin/vampn emergency status, \
                        /usr/local/sbin/vampn mailstatus, \
-                       /usr/local/sbin/vampn resend-all, \
+                       /usr/local/sbin/vampn resendall, \
                        /usr/local/sbin/vampn link [a-zA-Z0-9_.-]*, \
                        /usr/local/sbin/vampn keyconf [a-zA-Z0-9_.-]*, \
                        /usr/local/sbin/vampn resend [a-zA-Z0-9_.-]*, \

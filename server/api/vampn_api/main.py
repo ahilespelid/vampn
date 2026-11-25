@@ -265,9 +265,9 @@ def create_app(settings: Optional[Settings] = None, store=None, mailer=None, run
         return {"ok": True}
 
     # ---------- суперадмин: рассылка ключей ----------
-    @app.post("/v1/admin/keys/resend-all")
+    @app.post("/v1/admin/keys/resendall")
     def admin_resend_all(_p: Principal = Depends(admin)):
-        r = runner.run("resend-all", timeout=600)  # неушедшим vampn повторяет сам, поэтому до 3-4 минут
+        r = runner.run("resendall", timeout=600)  # неушедшим vampn повторяет сам, поэтому до 3-4 минут
         summary = next((l.strip() for l in reversed(r.out.splitlines()) if l.startswith("ИТОГ")), "")
         return {"ok": r.code == 0, "summary": summary or (r.err or r.out).strip()[-300:]}
 

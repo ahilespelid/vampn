@@ -189,7 +189,7 @@ function MailAll({count}: {count: number}) {
     <Card style={{gap: 10}}>
       <Label>рассылка ключей</Label>
       <View style={{flexDirection: 'row', gap: 8, flexWrap: 'wrap'}}>
-        <Btn small title="ключ всем заново" onPress={send} busy={busy === 'send'} disabled={!!busy} testID="resend-all" />
+        <Btn small title="ключ всем заново" onPress={send} busy={busy === 'send'} disabled={!!busy} testID="resendall" />
         <Btn small kind="ghost" title="кому ушло" onPress={status} busy={busy === 'status'} disabled={!!busy} testID="mail-status" />
       </View>
       {result ? <Notice kind={result.kind} text={result.text} /> : null}
