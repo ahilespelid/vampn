@@ -228,6 +228,211 @@ else
   echo "  (порт 22 занят в песочнице: $(cat $T/lst); блок пропущен)"; kill $LP 2>/dev/null
 fi
 
+echo "== 9. рассылка ключей: resend-all, журнал, повторы, тревога"
+cat > "$T/fakeself" <<'FS'
+#!/bin/bash
+# заглушка vampn: _mail ИМЯ / _mail --link ИМЯ / conf ИМЯ; failfirst_ИМЯ - первый вызов неудачный, fail_ИМЯ - всегда
+echo "self VAMPN_BASE=${VAMPN_BASE:-} $*" >> "$T/calls"
+n=${*: -1}
+if [[ -f $T/fail_$n ]]; then exit 1; fi
+if [[ -f $T/failfirst_$n ]]; then rm -f "$T/failfirst_$n"; exit 1; fi
+exit 0
+FS
+chmod +x "$T/fakeself"
+SELF=$T/fakeself; USERS_CONF=$T/users.conf; MAILLOG=$STATE/mail-status.tsv
+em_active() { [[ -n ${EMA:-} ]]; }
+mk9() { reset; EMA=; rm -f "$T"/fail_* "$T"/failfirst_* "$T/ep"; mkdir -p "$STATE/mirror/clients"; echo 1.1.1.1 > "$STATE/mirror/endpoint"
+        for u in a b c; do touch "$STATE/mirror/clients/$u.env"; done
+        printf '# пользователи\na a@x.ru\nb b@x.ru\nc c@x.ru\n' > "$USERS_CONF"; MAILLOG=$STATE/mail-status.tsv; }
+jl() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$2@x.ru" key "$3" "${4:-}" >> "$STATE/mail-status.tsv"; }
+
+mk9; out=$(resend_all 2>&1); rc=$?
+ok "resend-all: все 3 приняты, итог в выводе" "[[ $rc == 0 && \$out == *'ИТОГ: принято 3 из 3'* ]]"
+ok "resend-all: письма собираются из копии данных (VAMPN_BASE=mirror)" "[[ \$(grep -c \"self VAMPN_BASE=$STATE/mirror _mail\" $CALLS) == 3 ]]"
+ok "resend-all: комментарий из users.conf не принят за пользователя" "! grep -q '_mail #' $CALLS && ! grep -q '_mail пользователи' $CALLS"
+ok "resend-all: при успехе тревоги нет" "! grep -q NOTIFY $CALLS"
+
+mk9; touch "$T/fail_b"; out=$(resend_all 2>&1); rc=$?
+ok "resend-all: неушедший b повторён вторым проходом (2 вызова)" "[[ \$(grep -c '_mail b' $CALLS) == 2 ]]"
+ok "resend-all: код 1 и список неушедших в итоге" "[[ $rc == 1 && \$out == *'ИТОГ: принято 2 из 3, не ушло: b'* ]]"
+ok "resend-all: тревога в Telegram с именем" "grep -q 'NOTIFY рассылка ключей: принято 2 из 3, НЕ ушло: b' $CALLS"
+ok "resend-all: удачные не повторялись" "[[ \$(grep -c '_mail a' $CALLS) == 1 && \$(grep -c '_mail c' $CALLS) == 1 ]]"
+
+mk9; touch "$T/failfirst_b"; out=$(resend_all 2>&1); rc=$?
+ok "resend-all: b ушёл со второй попытки - итог 3 из 3, без тревоги" "[[ $rc == 0 && \$out == *'ИТОГ: принято 3 из 3'* ]] && ! grep -q NOTIFY $CALLS"
+
+mk9; echo 2.2.2.2 > "$T/ep"; out=$(resend_all 2>&1); rc=$?
+ok "resend-all: адрес копии не совпал с туннелем - письма не шлёт" "[[ $rc != 0 && \$out == *'не совпал'* ]] && ! grep -q '_mail' $CALLS"
+mk9; EMA=1; out=$(resend_all 2>&1); rc=$?
+ok "resend-all: в аварийном режиме отказывается" "[[ $rc != 0 && \$out == *'аварийный'* ]] && ! grep -q '_mail' $CALLS"
+
+echo "-- журнал и сторож"
+mk9; touch "$T/fail_b"; jl $((FAKE_NOW-5000)) a ok; jl $((FAKE_NOW-700)) b fail "SMTPServerDisconnected: x"; jl $((FAKE_NOW-100)) c fail "timeout"
+ok "mail_failed: видит b и c, a не видит" "[[ \$(mail_failed | cut -f1 | tr '\n' ' ') == 'b c ' ]]"
+mail_watch
+ok "сторож: одно сообщение о новых неушедших (b c)" "[[ \$(grep -c 'NOTIFY письмо с ключом не ушло: b c' $CALLS) == 1 ]]"
+ok "сторож: повторяет только b (c свежий), одно письмо за проверку" "[[ \$(grep -c '_mail b' $CALLS) == 1 && \$(grep -c '_mail c' $CALLS) == 0 ]]"
+mail_watch; mail_watch
+ok "сторож: повторы b считаются, сообщение не дублируется" "[[ \$(get mail_retry_b) == 3 ]] && [[ \$(grep -c 'NOTIFY письмо с ключом не ушло' $CALLS) == 1 ]]"
+mail_watch; mail_watch
+ok "сторож: после 3 повторов сдаётся и пишет один раз" "[[ \$(grep -c '_mail b' $CALLS) == 3 && \$(grep -c 'не ушёл и после 3 повторов' $CALLS) == 1 ]]"
+jl $((FAKE_NOW+1)) b ok; jl $((FAKE_NOW+1)) c ok; mail_watch
+ok "когда всё ушло, служебные метки сброшены" "[[ ! -e $STATE/mail_alerted && ! -e $STATE/mail_retry_b && ! -e $STATE/mail_gaveup_b ]]"
+
+mk9; jl $((FAKE_NOW-900)) b fail "x"; EMA=1; mail_watch
+ok "аварийный режим: сторож сообщает, но не шлёт ключи основного сервера" "grep -q 'NOTIFY письмо с ключом не ушло: b' $CALLS && ! grep -q '_mail' $CALLS"
+mk9; jl $((FAKE_NOW-900)) b fail "x"; echo 3.3.3.3 > "$T/ep"; mail_watch
+ok "адрес копии не совпал с туннелем: сторож сообщает, но не шлёт" "grep -q 'NOTIFY' $CALLS && ! grep -q '_mail' $CALLS"
+mk9; jl $((FAKE_NOW-900)) b fail "x"; touch "$T/fail_b"; mail_watch; jl $((FAKE_NOW-1)) b fail "x"; mail_watch
+ok "повтор не раньше чем через 10 минут после последней неудачи" "[[ \$(grep -c '_mail b' $CALLS) == 1 ]]"
+
+echo "-- vampn mailstatus"
+mk9; jl $((FAKE_NOW-60)) a ok; jl $((FAKE_NOW-60)) b fail "SMTPRecipientsRefused: no such user"
+out=$(mailstatus); rc=$?
+ok "mailstatus: a принято, b НЕ УШЛО с причиной, c нет записи" "[[ \$out == *'принято почтовым сервером'* && \$out == *'НЕ УШЛО: SMTPRecipientsRefused: no such user'* && \$out == *'нет записи'* ]]"
+ok "mailstatus: честная оговорка про спам и приложение" "[[ \$out == *'не спам ли'* && \$out == *'в приложении'* ]]"
+ok "mailstatus: код 1, пока есть неушедшие" "[[ $rc == 1 ]]"
+
+echo "-- link/keyconf из копии данных"
+mk9; : > "$CALLS"
+out=$(key_local link a); rc=$?
+ok "key_local link: берёт ссылку из копии" "[[ $rc == 0 ]] && grep -q 'self VAMPN_BASE=.*mirror _mail --link a' $CALLS"
+: > "$CALLS"; key_local conf b; rc=$?
+ok "key_local conf: берёт .conf из копии" "[[ $rc == 0 ]] && grep -q 'self VAMPN_BASE=.*mirror conf b' $CALLS"
+echo 9.9.9.9 > "$T/ep"; : > "$CALLS"; key_local link a; rc=$?
+ok "адрес копии не совпал: возвращает 1 (ссылку возьмут у VPS)" "[[ $rc == 1 ]] && ! grep -q self $CALLS"
+rm -f "$T/ep"; (key_local link 'bad name' >/dev/null 2>&1); rc=$?
+ok "плохое имя отвергается" "[[ $rc != 0 ]]"
+(key_local link nobody >/dev/null 2>&1); rc=$?
+ok "нет такого пользователя в копии: возвращает 1" "[[ $rc == 1 ]]"
+
+echo "== 10. почтовая часть (Python): повторы SMTP и журнал"
+awk "/<<'PY' \|\| true/{f=1;next} /^PY\$/{f=0} f" "$FILE" > "$T/mail.py"
+cat > "$T/pytest.py" <<'PYT'
+import os, sys, smtplib, time, json
+T = os.environ['T']
+os.environ.update(VAMPN_SELF='/bin/false', VAMPN_BASE=T + '/base', VAMPN_STATE=T + '/pystate')
+os.makedirs(T + '/base/clients', exist_ok=True)
+src = open(T + '/mail.py').read().rsplit('\nsys.exit(main', 1)[0]
+ns = {}
+exec(compile(src, 'mail.py', 'exec'), ns)
+res = []
+def chk(name, cond): res.append(('OK' if cond else 'FAIL') + ' ' + name)
+sleeps = []
+ns['time'].sleep = lambda s: sleeps.append(s)
+LOG = ns['MAIL_LOG']
+def lines():
+    try: return [l.split('\t') for l in open(LOG, encoding='utf-8').read().splitlines()]
+    except FileNotFoundError: return []
+def msg(user=None, to='a@x.ru'):
+    m = ns['base_msg'](to, 'тема')
+    if user: m['X-Vampn-User'] = user
+    m.set_content('x'); return m
+def reset():
+    sleeps.clear()
+    try: os.remove(LOG)
+    except FileNotFoundError: pass
+
+# 1. два временных сбоя, на третьей попытке ушло
+calls = []
+def flaky(m):
+    calls.append(1)
+    if len(calls) < 3: raise OSError('Connection reset')
+ns['_smtp_once'] = flaky
+reset(); ns['smtp_deliver'](msg('alice'))
+chk('временные сбои: 3 попытки, паузы 5 и 20 с', len(calls) == 3 and sleeps == [5, 20])
+chk('временные сбои: в журнале одна строка ok', [l[4] for l in lines()] == ['ok'])
+# 2. всё время сбой
+calls.clear()
+def dead(m):
+    calls.append(1); raise smtplib.SMTPServerDisconnected('Connection unexpectedly closed')
+ns['_smtp_once'] = dead
+reset(); raised = False
+try: ns['smtp_deliver'](msg('bob'))
+except Exception: raised = True
+L = lines()
+chk('постоянный сбой: ровно 3 попытки и ошибка наружу', raised and len(calls) == 3)
+chk('постоянный сбой: журнал fail с именем, адресом и причиной', len(L) == 1 and L[0][1:5] == ['bob', 'a@x.ru', 'key', 'fail'] and 'SMTPServerDisconnected' in L[0][5])
+# 3. неверный пароль - без повторов
+calls.clear()
+def badauth(m):
+    calls.append(1); raise smtplib.SMTPAuthenticationError(535, b'bad creds')
+ns['_smtp_once'] = badauth
+reset(); raised = False
+try: ns['smtp_deliver'](msg('carol'))
+except Exception: raised = True
+chk('неверный пароль: одна попытка, без пауз', raised and len(calls) == 1 and sleeps == [])
+chk('неверный пароль: fail в журнале', [l[4] for l in lines()] == ['fail'])
+# 4. адрес отвергнут - без повторов
+calls.clear()
+def norcpt(m):
+    calls.append(1); raise smtplib.SMTPRecipientsRefused({'a@x.ru': (550, b'no such user')})
+ns['_smtp_once'] = norcpt
+reset()
+try: ns['smtp_deliver'](msg('dan'))
+except Exception: pass
+chk('адрес отвергнут: одна попытка', len(calls) == 1 and [l[4] for l in lines()] == ['fail'])
+# 5. вид письма: ключ и обычное
+ns['_smtp_once'] = lambda m: None
+reset(); ns['smtp_deliver'](msg('eve', 'e@x.ru')); ns['smtp_deliver'](msg(None, 'boss@x.ru'))
+L = lines()
+chk('вид записи: письмо с ключом = key, без имени = notice', L[0][1:4] == ['eve', 'e@x.ru', 'key'] and L[1][1:4] == ['', 'boss@x.ru', 'notice'])
+# 6. подробности: без табуляций и переносов, не длиннее 200
+def noisy(m): raise smtplib.SMTPServerDisconnected('a\tb\nc ' + 'x' * 500)
+ns['_smtp_once'] = noisy
+reset()
+try: ns['smtp_deliver'](msg('fay'))
+except Exception: pass
+L = lines()
+chk('подробности: одна строка из 6 полей, не длиннее 200', len(L) == 1 and len(L[0]) == 6 and len(L[0][5]) <= 200)
+# 7. журнал не растёт бесконечно
+reset()
+with open(LOG, 'w', encoding='utf-8') as f:
+    f.write(('1\tz\tz@x.ru\tkey\tok\t' + 'y' * 100 + '\n') * 5000)
+ns['journal'](msg('last'), 'ok')
+L = lines()
+chk('журнал усекается и новая запись в конце', len(L) <= 1501 and L[-1][1] == 'last')
+# 8. deliver(): ok пишется, если письмо принято; дубль не пишется
+ns['_smtp_once'] = lambda m: None
+ns['mark_sent'] = lambda m: None; ns['notify_app'] = lambda m: None
+reset()
+r = ns['deliver'](msg('gus'))
+chk('deliver: sent и запись ok', r == 'sent' and [l[4] for l in lines()] == ['ok'])
+ns['already_sent'] = lambda m: True
+reset(); r = ns['deliver'](msg('gus'))
+chk('deliver: дубль не отправляется и не пишется в журнал', r == 'dup' and lines() == [])
+# 9. запись журнала недоступна - письму не мешает
+ns['MAIL_LOG'] = '/proc/nonexistent/x'; ns['STATE_DIR'] = '/proc/nonexistent'
+ns['already_sent'] = lambda m: False
+try: ns['smtp_deliver'](msg('hal')); fine = True
+except Exception: fine = False
+chk('журнал недоступен: письмо всё равно уходит', fine)
+print('\n'.join(res))
+PYT
+pyout=$(T=$T python3 -I "$T/pytest.py" 2>&1)
+while IFS= read -r l; do
+  case $l in
+    "OK "*)   ok "${l#OK }" "true" ;;
+    "FAIL "*) ok "${l#FAIL }" "false" ;;
+    "") ;;
+    *)        echo "  py: $l" ;;
+  esac
+done <<<"$pyout"
+ok "Python-тесты отработали целиком (9 проверок + 2)" "[[ \$(grep -c '^OK \|^FAIL ' <<<\"\$pyout\") -ge 11 ]]"
+echo "-- журнал, записанный Python, читает bash"
+rm -f "$STATE/mail-status.tsv"; rm -rf "$T/pystate"
+cat > "$T/pyj.py" <<'PYT'
+import os, sys, smtplib
+T = os.environ['T']
+os.environ.update(VAMPN_SELF='/bin/false', VAMPN_BASE=T + '/base', VAMPN_STATE=os.environ['ST'])
+src = open(T + '/mail.py').read().rsplit('\nsys.exit(main', 1)[0]
+ns = {}; exec(compile(src, 'mail.py', 'exec'), ns)
+m = ns['base_msg']('zed@x.ru', 's'); m['X-Vampn-User'] = 'zed'; m.set_content('x')
+ns['journal'](m, 'fail', 'SMTPServerDisconnected: boom')
+PYT
+T=$T ST=$STATE python3 -I "$T/pyj.py"
+ok "bash читает запись Python: zed в списке неушедших" "[[ \$(mail_failed | cut -f1) == zed ]]"
+
 echo; echo "итого: $pass прошло, $failn не прошло"
 rm -rf "$T"
 [[ $failn == 0 ]]

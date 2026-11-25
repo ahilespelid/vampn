@@ -10,6 +10,9 @@
 #   vampn list             пользователи VPN и их последнее подключение
 #   vampn reissue ИМЯ      перевыпустить ключ (старый перестаёт работать), новый уйдёт на почту
 #   vampn resend ИМЯ       отправить текущий ключ на почту ещё раз
+#   vampn resend-all       отправить текущий ключ ВСЕМ из users.conf заново (с повтором неушедших и тревогой в Telegram)
+#   vampn mailstatus       кому и когда ушёл ключ, у кого отправка не удалась
+#   vampn keyconf ИМЯ      показать .conf ключа (из него приложение строит QR)
 #   vampn link ИМЯ         показать строку vpn:// пользователя
 #   vampn users            применить /etc/vampn/users.conf сейчас (сам применяется в течение минуты)
 #   vampn rotate [--force] сменить IP сервера сейчас (--force - без лимитов)
@@ -24,7 +27,7 @@
 # Настройки (homeserv, /etc/vampn): timeweb.env - токен Timeweb, secrets.env - почта,
 #   users.conf - пользователи (ИМЯ ПОЧТА; сохранили - через минуту применено, ключи разосланы).
 # Служебные (их вызывают таймер и ключи между серверами): check, users-push, remote, mail,
-#   alert, conf, qr, _mail, _endpoint-change.
+#   alert, conf, qr, _mail, _endpoint-change. Журнал отправки писем: /var/lib/vampn/mail-status.tsv.
 set -uo pipefail
 SELF=/usr/local/sbin/vampn
 STATE=/var/lib/vampn
@@ -56,6 +59,8 @@ from email.parser import BytesParser
 SELF = os.environ['VAMPN_SELF']
 BASE = os.environ.get('VAMPN_BASE', '/root/vampn')
 CL = BASE + '/clients'
+STATE_DIR = os.environ.get('VAMPN_STATE', '/var/lib/vampn')
+MAIL_LOG = STATE_DIR + '/mail-status.tsv'   # журнал отправки: время, имя, адрес, вид (key|notice), ok|fail, подробности
 SENT_DIR = '/var/lib/vampn/mail-sent'   # письма о смене IP: файл на адрес, строки - кому уже ушло
 ROTATION_REASON = 'Адрес VPN-сервера изменился, старый ключ больше не работает.'
 KIND = os.environ.get('VAMPN_KIND', '')     # emergency - ключи аварийного сервера
@@ -87,7 +92,7 @@ def load_env(path):
 S = load_env('/etc/vampn/secrets.env')
 
 
-def smtp_send(m):
+def _smtp_once(m):
     host, port = S['SMTP_HOST'], int(S.get('SMTP_PORT', '587'))
     mode = S.get('SMTP_TLS', 'starttls').split()[0].lower()
     ctx = ssl.create_default_context()
@@ -103,6 +108,53 @@ def smtp_send(m):
         if S.get('SMTP_USER'):
             c.login(S['SMTP_USER'], S['SMTP_PASS'])
         c.send_message(m)
+
+
+SMTP_PERMANENT = (smtplib.SMTPAuthenticationError, smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused)
+
+
+def smtp_send(m, tries=3):
+    """Отправка с повторами: сбой сети или временный отказ - ещё раз через 5 и 20 с. Неверный пароль или адрес повторять бесполезно."""
+    last = None
+    for i in range(tries):
+        try:
+            return _smtp_once(m)
+        except SMTP_PERMANENT:
+            raise
+        except (smtplib.SMTPException, OSError) as e:
+            last = e
+            if i < tries - 1:
+                time.sleep(5 * 4 ** i)
+    raise last
+
+
+def journal(m, status, detail=''):
+    """Строка в журнал отправки (его читают vampn mailstatus и сторож). Сбой записи письму не мешает."""
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        to = email.utils.getaddresses([str(m['To'] or '')])
+        addr = to[0][1] if to else ''
+        user = str(m.get('X-Vampn-User') or '')
+        det = re.sub(r'\s+', ' ', str(detail))[:200]
+        with open(MAIL_LOG, 'a', encoding='utf-8') as f:
+            f.write('\t'.join([str(int(time.time())), user, addr, 'key' if user else 'notice', status, det]) + '\n')
+        if os.path.getsize(MAIL_LOG) > 400000:
+            with open(MAIL_LOG, encoding='utf-8') as f:
+                tail = f.read().splitlines()[-1500:]
+            with open(MAIL_LOG, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(tail) + '\n')
+    except OSError:
+        pass
+
+
+def smtp_deliver(m):
+    """Отправить письмо и записать итог в журнал: ok - SMTP-сервер принял письмо, fail - не удалось после повторов."""
+    try:
+        smtp_send(m)
+    except Exception as e:
+        journal(m, 'fail', f'{e.__class__.__name__}: {e}')
+        raise
+    journal(m, 'ok')
 
 
 def already_sent(m):
@@ -190,7 +242,7 @@ def deliver(m):
         # homeserv недоступен - пробуем SMTP напрямую (сработает, если хостер открыл порты)
     if already_sent(m):
         return 'dup'
-    smtp_send(m)
+    smtp_deliver(m)
     mark_sent(m)
     notify_app(m)
     return 'sent'
@@ -285,7 +337,7 @@ def main(argv):
         if already_sent(m):
             print('dup')
             return 0
-        smtp_send(m)
+        smtp_deliver(m)
         mark_sent(m)
         notify_app(m)
         print('sent')
@@ -1047,15 +1099,123 @@ status() {
   echo "журнал       :"; tail -6 "$STATE/vampn.log" 2>/dev/null | sed 's/^/  /'
 }
 
+# ---------- надёжность рассылки ключей ----------
+# Журнал $STATE/mail-status.tsv пишет почтовая часть: время, имя, адрес, вид (key|notice), ok|fail, подробности.
+# ok значит «SMTP-сервер принял письмо»; дошло ли оно до ящика, он не сообщает (письмо могло уйти в спам).
+MAILLOG=$STATE/mail-status.tsv
+USERS_CONF=/etc/vampn/users.conf
+MAIL_RETRY_AFTER=600     # повтор неудачной отправки не раньше, чем через 10 мин
+MAIL_RETRY_MAX=3         # сколько раз сторож сам пробует ещё
+
+mail_failed() {   # у кого ПОСЛЕДНЯЯ отправка ключа не удалась: имя<TAB>время<TAB>подробности
+  [[ -s $MAILLOG ]] || return 0
+  awk -F'\t' '$4=="key" && $2!="" {s[$2]=$5; t[$2]=$1; d[$2]=$6} END{for(n in s) if(s[n]=="fail") print n "\t" t[n] "\t" d[n]}' "$MAILLOG" | sort
+}
+
+mail_watch() {    # сторож: неудачные письма с ключом повторяет сам, один раз сообщает в Telegram
+  exec 8>"$STATE/mail.lock"; flock -n 8 || return 0
+  local failed names new n ts det cnt
+  failed=$(mail_failed)
+  if [[ -z $failed ]]; then rm -f "$STATE/mail_alerted" "$STATE"/mail_retry_* "$STATE"/mail_gaveup_*; return 0; fi
+  names=$(cut -f1 <<<"$failed" | tr '\n' ' '); names=${names% }
+  new=$(comm -13 <(tr ' ' '\n' <<<"$(cat "$STATE/mail_alerted" 2>/dev/null)" | sort) <(tr ' ' '\n' <<<"$names" | sort) | tr '\n' ' '); new=${new% }
+  put mail_alerted "$names"
+  [[ -n $new ]] && notify "письмо с ключом не ушло: $new. Сторож повторит сам (до $MAIL_RETRY_MAX раз), список: vampn mailstatus"
+  em_active && return 0
+  [[ -f $MIRROR/server.env && $(cat "$MIRROR/endpoint" 2>/dev/null) == "$(tun_endpoint)" ]] || return 0
+  while IFS=$'\t' read -r n ts det; do
+    [[ -n $n ]] || continue
+    cnt=$(get "mail_retry_$n")
+    if (( cnt >= MAIL_RETRY_MAX )); then
+      if [[ ! -f $STATE/mail_gaveup_$n ]]; then
+        touch "$STATE/mail_gaveup_$n"
+        notify "ключ для $n не ушёл и после $MAIL_RETRY_MAX повторов ($det). Проверьте адрес в users.conf или пароль почты, потом vampn resend-all"
+      fi
+      continue
+    fi
+    (( $(now) - ts >= MAIL_RETRY_AFTER )) || continue
+    put "mail_retry_$n" $(( cnt + 1 ))
+    if VAMPN_BASE=$MIRROR "$SELF" _mail "$n" </dev/null >>"$STATE/vampn.log" 2>&1; then
+      log "повтор ключа $n: ушёл"; rm -f "$STATE/mail_retry_$n" "$STATE/mail_gaveup_$n"
+    else
+      log "повтор ключа $n: опять не ушёл ($(( cnt + 1 ))/$MAIL_RETRY_MAX)"
+    fi
+    break             # одно письмо за проверку: сторож не должен надолго занимать таймер
+  done <<<"$failed"
+}
+
+resend_all() {    # vampn resend-all: текущий ключ всем из users.conf, неушедшим - ещё раз, итог и тревога
+  exec 8>"$STATE/mail.lock"; flock -w 300 8
+  em_active && die "сейчас аварийный режим: ключи основного сервера не рассылаю. Сначала vampn emergency off"
+  [[ -f $MIRROR/server.env ]] || die "нет копии данных VPN-сервера ($MIRROR): рассылать нечего (vampn mirror)"
+  pull_mirror >/dev/null 2>&1 || true
+  local mep tep; mep=$(cat "$MIRROR/endpoint" 2>/dev/null); tep=$(tun_endpoint)
+  [[ $mep == "$tep" ]] || die "адрес в копии данных ($mep) не совпал с туннелем ($tep): ключи с неверным адресом не рассылаю (vampn status)"
+  local -a todo=() bad=()
+  mapfile -t todo < <(awk '!/^[[:space:]]*#/ && NF>=2 {print $1}' "$USERS_CONF")
+  local total=${#todo[@]} ok=0 n pass
+  (( total )) || die "в $USERS_CONF нет пользователей"
+  for pass in 1 2; do
+    bad=()
+    for n in "${todo[@]}"; do
+      if VAMPN_BASE=$MIRROR "$SELF" _mail "$n" </dev/null >>"$STATE/vampn.log" 2>&1; then
+        echo "  $n: принято почтовым сервером"; ok=$(( ok + 1 ))
+      else
+        echo "  $n: НЕ УШЛО"; bad+=("$n")
+      fi
+    done
+    (( ${#bad[@]} )) || break
+    if (( pass == 1 )); then echo "повторяю неушедшие через 60 с: ${bad[*]}"; sleep 60; todo=("${bad[@]}"); fi
+  done
+  if (( ${#bad[@]} )); then
+    notify "рассылка ключей: принято $ok из $total, НЕ ушло: ${bad[*]}. Подробности: vampn mailstatus"
+    echo "ИТОГ: принято $ok из $total, не ушло: ${bad[*]}"
+    return 1
+  fi
+  log "рассылка ключей всем: принято $ok из $total"
+  echo "ИТОГ: принято $ok из $total"
+}
+
+key_local() {     # link|conf ИМЯ - из копии данных на homeserv, если она сходится с туннелем (VPN-сервер может не отвечать)
+  local what=$1 n=${2:-}
+  [[ $n =~ ^[a-zA-Z0-9_.-]{1,32}$ ]] || die "нужно имя пользователя: vampn $what ИМЯ"
+  em_active && die "сейчас аварийный режим: основной сервер недоступен, эта команда работает с ним"
+  [[ -f $MIRROR/clients/$n.env && $(cat "$MIRROR/endpoint" 2>/dev/null) == "$(tun_endpoint)" ]] || return 1
+  case $what in
+    link) VAMPN_BASE=$MIRROR "$SELF" _mail --link "$n" ;;
+    conf) VAMPN_BASE=$MIRROR "$SELF" conf "$n" ;;
+  esac
+}
+
+mailstatus() {    # vampn mailstatus: по каждому из users.conf - последняя отправка ключа
+  local n em last ts st det bad=0 line
+  printf '%-14s %-34s %-12s %s\n' ИМЯ ПОЧТА ПОСЛЕДНЯЯ ИТОГ
+  while read -r n em _; do
+    [[ -z $n || $n == \#* ]] && continue
+    last=$(awk -F'\t' -v n="$n" '$4=="key" && $2==n {l=$0} END{print l}' "$MAILLOG" 2>/dev/null)
+    if [[ -z $last ]]; then printf '%-14s %-34s %-12s %s\n' "$n" "$em" - "нет записи (письмо ушло до журнала)"; continue; fi
+    IFS=$'\t' read -r ts _ _ _ st det <<<"$last"
+    if [[ $st == ok ]]; then line="принято почтовым сервером"; else line="НЕ УШЛО: $det"; bad=$(( bad + 1 )); fi
+    printf '%-14s %-34s %-12s %s\n' "$n" "$em" "$(date -d "@$ts" '+%d.%m %H:%M')" "$line"
+  done < "$USERS_CONF"
+  echo
+  echo "«принято» - почтовый сервер взял письмо; дойдёт ли оно до ящика (не спам ли), он не сообщает."
+  echo "Ключ всегда можно получить и в приложении vampn по логину. Отправить всем заново: vampn resend-all"
+  (( bad )) && return 1 || return 0
+}
+
 home_main() {
   local cmd=${1:-}
   case $cmd in
     mail)       mailpy --relay; return ;;            # письма от VPN-сервера (принудительная команда ключа)
     alert)      mailpy --alert "${2:-vampn}"; return ;;
+    resend-all) resend_all; return ;;
+    mailstatus) mailstatus; return ;;
+    keyconf)    key_local conf "${2:-}" || die "нет актуальной копии ключа ${2:-} (vampn mirror)"; return ;;
   esac
   tw_init
   case $cmd in
-    check)  check ;;
+    check)  check; mail_watch ;;
     status) status ;;
     rotate) rotate "${2:-}" ;;
     reboot) do_reboot "${2:-}" ;;
@@ -1081,7 +1241,9 @@ home_remote() {
   case $cmd in
     list)   remote list ;;
     server) remote status ;;
-    reissue|resend|link)
+    link)   [[ ${2:-} =~ ^[a-zA-Z0-9_.-]{1,32}$ ]] || die "нужно имя пользователя: vampn link ИМЯ"
+            key_local link "$2" || remote "link $2" ;;
+    reissue|resend)
       [[ ${2:-} =~ ^[a-zA-Z0-9_.-]{1,32}$ ]] || die "нужно имя пользователя: vampn $cmd ИМЯ"
       remote "$cmd $2"
       [[ $cmd == reissue ]] && { pull_mirror >/dev/null 2>&1 || true; } ;;
