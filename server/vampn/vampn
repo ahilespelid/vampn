@@ -304,13 +304,15 @@ def user_msg(name, reason):
         subject = f'Ваш VPN: новый ключ «{name}»' if reason else f'Ваш VPN: ключ «{name}»'
     m = base_msg(u['EMAIL'], subject)
     m['X-Vampn-User'] = name
-    m['X-Vampn-Endpoint'] = open(BASE + '/endpoint').read().strip()
+    ep_ip = open(BASE + '/endpoint').read().strip()
+    m['X-Vampn-Endpoint'] = ep_ip
     if reason == ROTATION_REASON:
         m['X-Vampn-Rotation'] = '1'
     intro = f'{reason}\n\n' if reason else ''
     m.set_content(
         f'Здравствуйте!\n\n{intro}'
-        f'Имя ключа: {name} (в приложении профиль будет называться {profile(name)})\n\n'
+        f'Имя ключа: {name} (в приложении профиль будет называться {profile(name)})\n'
+        f'Адрес сервера (IP): {ep_ip}\n\n'
         'Ваш ключ VPN (скопируйте строку целиком):\n\n'
         f'{vpn_link(name)}\n\n'
         'Как подключиться:\n'

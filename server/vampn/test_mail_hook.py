@@ -119,6 +119,24 @@ class Notify(unittest.TestCase):
             self.assertNotIn('}', sql)
 
 
+class MailBody(unittest.TestCase):
+    """В письме с ключом указан текущий IP сервера (из файла endpoint)."""
+
+    def test_key_mail_shows_server_ip(self):
+        base, cl = NS['BASE'], NS['CL']
+        os.makedirs(cl, exist_ok=True)
+        open(base + '/endpoint', 'w').write('198.51.100.9\n')
+        keys = 'PORT JC JMIN JMAX S1 S2 S3 S4 H1 H2 H3 H4 MTU'.split()
+        open(base + '/server.env', 'w').write('\n'.join(f'{k}=1' for k in keys) + '\nSERVER_PUBKEY=pk\n')
+        open(cl + '/ann.env', 'w').write('NAME=ann\nEMAIL=ann@example.com\nIP=10.77.0.5\nPRIVKEY=a\nPUBKEY=b\nPSK=c\n')
+        open(cl + '/ann.conf', 'w').write('[Interface]\n')
+        with mock.patch.object(subprocess, 'run', Recorder(result=mock.Mock(returncode=0, stdout=b'png'))):
+            m = NS['user_msg']('ann', None)
+        body = m.get_body(('plain',)).get_content()
+        self.assertIn('Адрес сервера (IP): 198.51.100.9', body)
+        self.assertEqual(m['X-Vampn-Endpoint'], '198.51.100.9')
+
+
 class Delivery(unittest.TestCase):
     def deliver(self, m, method='smtp', already=False, ssh_out=b'sent', ssh_rc=0):
         rec = Recorder(result=mock.Mock(returncode=ssh_rc, stdout=ssh_out, stderr=b''))
