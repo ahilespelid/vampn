@@ -17,7 +17,7 @@ SELF=/bin/false; MIRROR=$STATE/mirror; TUN_CONF=$T/vampn.conf
 echo "Endpoint = 1.1.1.1:49029" > "$TUN_CONF"
 # shellcheck disable=SC1090
 source "$T/seg.sh"
-MIRROR=$STATE/mirror; TUN_CONF=$T/vampn.conf; IFACE=lo
+MIRROR=$STATE/mirror; TUN_CONF=$T/vampn.conf; IFACE=lo; EM_ENV=$T/em.env
 
 pass=0; failn=0
 ok() { if eval "$2"; then pass=$((pass+1)); printf '  OK   %s\n' "$1"; else failn=$((failn+1)); printf '  FAIL %s\n' "$1"; fi; }
@@ -29,7 +29,7 @@ tg() { echo "tg $*" >> "$CALLS"; }
 mailpy() { echo "mailpy $*" >> "$CALLS"; cat > /dev/null; }
 tw_init() { :; }
 TIMEWEB_SERVER_ID=1
-reset() { : > "$CALLS"; rm -rf "$STATE"; mkdir -p "$STATE/mirror"; touch "$STATE/mirror/server.env"; FAKE_NOW=1000000; }
+reset() { : > "$CALLS"; rm -rf "$STATE" "$T/twn"; mkdir -p "$STATE/mirror"; touch "$STATE/mirror/server.env"; FAKE_NOW=1000000; TW_NOW=on; TW_LATE=on; }
 log() { echo "LOG $*" >> "$CALLS"; }
 do_reboot() { echo "reboot ${1:-soft}" >> "$CALLS"; return 0; }
 all_ipv4() { cat "$T/ips" 2>/dev/null; }
@@ -41,7 +41,9 @@ pull_mirror() { :; }
 push_users() { :; }
 em_active() { return 1; }
 inet_ok() { return 0; }
-tw_status() { echo on; }
+TW_LATE=on
+tw_status() { local n; n=$(cat "$T/twn" 2>/dev/null || echo 0); echo $((n+1)) > "$T/twn"; if (( n >= 1 )) && [[ $TW_LATE != on ]]; then echo "$TW_LATE"; else echo "${TW_NOW:-on}"; fi; }
+emergency_on() { echo emergency-on >> "$CALLS"; }
 # Timeweb: POST отдаёт адреса по очереди, DELETE пишет в журнал
 NEXT=0
 api() {
@@ -53,7 +55,7 @@ api() {
 routed_list() { printf '%s\n' "$@" > "$T/routed"; }
 ip_routed() { grep -qx "$1" "$T/routed"; }
 HS=0   # когда появится "новое рукопожатие" (0 = никогда)
-wait_new_handshake() { echo "wait-hs since=$1" >> "$CALLS"; (( HS )); }
+wait_new_handshake() { echo "wait-hs since=$1 secs=$2" >> "$CALLS"; (( HS )); }
 notify() { echo "NOTIFY $1" >> "$CALLS"; }
 
 echo "== 1. смена IP: первые два адреса режутся, третий проходит"
@@ -68,6 +70,9 @@ ok "ключи разосланы ровно один раз" "[[ \$(grep -c 'ke
 ok "ключи ушли с новым адресом" "grep -q 'keys-mail A.A.A.3' $CALLS"
 ok "ключи после ожидания нового рукопожатия" "[[ \$(grep -n 'wait-hs' $CALLS | cut -d: -f1) -lt \$(grep -n 'keys-mail' $CALLS | cut -d: -f1) ]]"
 ok "метка ожидания равна моменту переключения" "grep -q 'wait-hs since=1000000' $CALLS"
+ok "ждёт рукопожатие 150 с, а не 8 минут" "grep -q 'secs=150' $CALLS && [[ \$(grep -c wait-hs $CALLS) == 1 ]]"
+ok "удачная смена записана тремя полями" "[[ \$(awk 'NF==3' $STATE/rotations | wc -l) == 1 ]]"
+ok "счётчика неудач нет" "[[ ! -e $STATE/rot_fails ]]"
 ok "отложенной рассылки не осталось" "[[ ! -e $STATE/keys_pending ]]"
 ok "смена записана в rotations" "grep -q '9.9.9.9 A.A.A.3' $STATE/rotations"
 ok "сообщение об успехе" "grep -q 'NOTIFY IP сменён: 9.9.9.9 → A.A.A.3' $CALLS"
@@ -81,7 +86,7 @@ ok "сделано ровно 6 попыток" "[[ \$(grep -c POST-ip $CALLS) =
 ok "все кандидаты убраны, остался только старый" "[[ \$(cat $T/ips | tr '\n' ' ') == '9.9.9.9 ' ]]"
 ok "ключи не рассылались" "! grep -q keys-mail $CALLS"
 ok "перезагрузки VPS не было" "! grep -q reboot $CALLS"
-ok "повтор разрешён через 10 минут, не через час" "[[ \$(get last_rotation) == \$((1000000 - 3600 + 600)) ]]"
+ok "повтор разрешён через 3 минуты, не через час" "[[ \$(get last_rotation) == \$((1000000 - 3600 + 180)) ]]"
 ok "в rotations ничего не записано" "[[ ! -s $STATE/rotations ]]"
 ok "сообщение о неудаче подбора" "grep -q 'не нашёл адрес' $CALLS"
 
@@ -92,6 +97,36 @@ ok "rotate вернул 1" "[[ $rc == 1 ]]"
 ok "ключи НЕ разосланы" "! grep -q keys-mail $CALLS"
 ok "рассылка отложена до связи" "[[ \$(get keys_pending) == C1 ]]"
 ok "жёсткая перезагрузка" "grep -q 'reboot hard' $CALLS"
+ok "неудача помечена fail и в суточный лимит не идёт" "grep -q '9.9.9.9 C1 fail' $STATE/rotations && [[ \$(awk 'NF==3' $STATE/rotations | wc -l) == 0 ]]"
+ok "счётчик неудач подряд = 1" "[[ \$(get rot_fails) == 1 ]]"
+ok "повтор разрешён через 3 минуты" "[[ \$(get last_rotation) == \$((1000000 - 3600 + 180)) ]]"
+ok "один проход ожидания (сервер on)" "[[ \$(grep -c wait-hs $CALLS) == 1 ]]"
+echo "== 3б. сервер в Timeweb ещё грузится: ожидание продлевается один раз"
+reset; printf '9.9.9.9\n' > "$T/ips"; printf 'C2\n' > "$T/cands"; rm -f "$T/next"; HS=0; routed_list C2; TW_LATE=rebooting
+rotate >/dev/null 2>&1
+ok "два ожидания: 150 и 120 с" "[[ \$(grep -c wait-hs $CALLS) == 2 ]] && grep -q 'secs=120' $CALLS"
+echo "== 3в. после 3 неудач подряд автосмена стоит, ручная --force идёт"
+reset; printf '9.9.9.9\n' > "$T/ips"; printf 'C3\n' > "$T/cands"; rm -f "$T/next"; HS=1; routed_list C3; put rot_fails 3
+rotate >/dev/null 2>&1; rc=$?
+ok "автосмена не пошла" "[[ $rc == 1 ]] && ! grep -q POST-ip $CALLS"
+ok "одно сообщение о тупике" "[[ \$(grep -c 'смены IP подряд не помогли' $CALLS) == 1 ]]"
+: > "$CALLS"; rotate >/dev/null 2>&1
+ok "второй раз то же сообщение не шлётся" "! grep -q 'смены IP подряд' $CALLS"
+: > "$CALLS"; rotate --force >/dev/null 2>&1; rc=$?
+ok "ручная смена --force проходит" "[[ $rc == 0 ]] && grep -q POST-ip $CALLS"
+ok "после успеха счётчик неудач сброшен" "[[ ! -e $STATE/rot_fails ]]"
+echo "== 3г. статус сервера не on: смена IP не начинается"
+reset; printf '9.9.9.9\n' > "$T/ips"; printf 'D1\n' > "$T/cands"; rm -f "$T/next"; HS=1; routed_list D1; TW_NOW=off
+rotate >/dev/null 2>&1; rc=$?
+ok "rotate вернул 1, Timeweb не трогали" "[[ $rc == 1 ]] && ! grep -q POST-ip $CALLS"
+ok "в журнале причина" "grep -q 'статус сервера в Timeweb off' $CALLS"
+rotate --force >/dev/null 2>&1; rc=$?
+ok "и ручная --force тоже ждёт статуса on" "[[ $rc == 1 ]] && ! grep -q POST-ip $CALLS"
+echo "== 3д. неудачные смены не мешают суточному лимиту удачных"
+reset; printf '9.9.9.9\n' > "$T/ips"; printf 'E1\n' > "$T/cands"; rm -f "$T/next"; HS=1; routed_list E1
+printf '%s a b fail\n%s a b fail\n%s a b fail\n%s a b fail\n' 999000 999100 999200 999300 > "$STATE/rotations"; put last_rotation 0
+rotate >/dev/null 2>&1; rc=$?
+ok "четыре неудачи за сутки не блокируют смену" "[[ $rc == 0 ]] && grep -q POST-ip $CALLS"
 
 echo "== 4. отложенная рассылка в check() после настоящей связи"
 reset; echo C1 > "$T/ep"; put keys_pending C1; put fails 3
@@ -131,6 +166,26 @@ ok "3-4 минуты: смены IP ещё нет" "! grep -q POST-ip $CALLS"
 printf 'Q1\n' > "$T/cands"; rm -f "$T/next"; routed_list Q1; HS=1
 FAKE_NOW=$((FAKE_NOW+60)); check >/dev/null 2>&1
 ok "5-я минута: пошла смена IP" "grep -q 'POST-ip Q1' $CALLS"
+
+echo "== 6б. аварийный канал включается сам на 3-й минуте без связи"
+reset; printf 'P1\n' > "$T/ips"; echo P1 > "$T/ep"; : > "$T/routed"; touch "$T/em.env"
+hs_age() { echo 900; }; probe_tunnel() { return 1; }; once() { :; }; put last_reboot 1000000; put last_rotation 1000000; put fails 1
+check >/dev/null 2>&1
+ok "2-я минута: аварийный канал ещё не включается" "! grep -q emergency-on $CALLS"
+check >/dev/null 2>&1
+ok "3-я минута: аварийный канал включён сам" "grep -q emergency-on $CALLS"
+: > "$CALLS"; check >/dev/null 2>&1
+ok "4-я минута: второй раз не включает" "! grep -q emergency-on $CALLS"
+reset; printf 'P1\n' > "$T/ips"; echo P1 > "$T/ep"; rm -f "$T/em.env"; put last_reboot 1000000; put last_rotation 1000000; put fails 5
+check >/dev/null 2>&1
+ok "нет emergency.env - не включает и не падает" "! grep -q emergency-on $CALLS"
+reset; printf 'P1\n' > "$T/ips"; echo P1 > "$T/ep"; touch "$T/em.env"; rm -rf "$STATE/mirror"; put last_reboot 1000000; put last_rotation 1000000; put fails 5
+check >/dev/null 2>&1
+ok "нет копии данных пользователей - не включает" "! grep -q emergency-on $CALLS"
+reset; printf 'P1\n' > "$T/ips"; echo P1 > "$T/ep"; touch "$T/em.env"; put last_reboot 1000000; put last_rotation 1000000; put fails 5; TW_NOW=off
+check >/dev/null 2>&1
+ok "аварийный канал включается и при статусе off в Timeweb" "grep -q emergency-on $CALLS"
+echo
 
 echo "== 7. ip_routed по трассам"
 unset -f ip_routed; source <(grep -E '^ip_routed\(\)' "$FILE")

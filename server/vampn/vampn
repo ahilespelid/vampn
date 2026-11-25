@@ -692,11 +692,14 @@ emergency_main() {
 # ====================================================================================================
 # homeserv: сторож VPN-сервера. Раз в минуту проверяет туннель; если он мёртв, а интернет у homeserv есть:
 #   2 мин без связи -> перезагрузка сервера через API Timeweb
+#   3 мин без связи -> аварийный канал (Бостон) включается сам, аварийные ключи уходят на почту
 #   5 мин без связи -> смена IPv4: Timeweb выдаёт новый адрес, с homeserv проверяется трассой, что до него
 #   доходят пакеты (если нет - адрес убирается и берётся следующий, до 6 попыток); старый удаляется только
 #   после этого. Ключи рассылаются один раз и только после НОВОГО рукопожатия и ответа через туннель.
-#   После смены IP связи нет 8 мин -> жёсткая перезагрузка; дальше перезагрузка не чаще раза в 30 мин,
-#   смена IP не чаще раза в час и не больше 4 в сутки. Сервер выключен -> включает.
+#   После смены IP связи нет 150 с (ещё 120 с, если сервер в Timeweb не on) -> жёсткая перезагрузка; такая смена в лимит
+#   не считается, повтор через 3 мин, но не больше 3 неудач подряд (дальше нужна проверка вручную).
+#   Удачные смены: не чаще раза в час и не больше 4 в сутки. Менять IP можно только при статусе on.
+#   Перезагрузка не чаще раза в 30 мин. Сервер выключен -> включает.
 #   Связь = свежее рукопожатие (моложе 45 с) или ответ sshd VPS через туннель (TCP 22 открыт для awg0).
 # Сообщения: Telegram (tg notify alerts) + письмо - Telegram ходит через этот же туннель. Одно сообщение
 # на одну аварию. Пока туннель жив: применяет users.conf, раз в 10 мин копирует данные пользователей.
@@ -706,8 +709,9 @@ TUN_CONF=/etc/amnezia/amneziawg/vampn.conf
 MIRROR=$STATE/mirror
 API=https://api.timeweb.cloud/api/v1
 HS_FRESH=45 PROBE_TRIES=3 PROBE_TIMEOUT=3 PROBE_HOST=10.77.0.1
-REBOOT_AT=2 ROTATE_AT=5 REBOOT_GAP=$((30*60)) ROTATE_GAP=$((60*60)) ROTATE_RETRY=600 ROTATE_TRIES=6 ROUTE_MIN_HOP=4
+REBOOT_AT=2 ROTATE_AT=5 REBOOT_GAP=$((30*60)) ROTATE_GAP=$((60*60)) ROTATE_RETRY=180 ROTATE_TRIES=6 ROUTE_MIN_HOP=4
 MAX_ROT_PER_DAY=4 MIRROR_EVERY=600
+EM_AT=3 HS_WAIT=150 HS_WAIT_EXTRA=120 MAX_FAIL_ROT=3
 SSH_SRV=(ssh -T -o LogLevel=ERROR -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10
          -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/vampn/mirror.known_hosts)
 
@@ -897,15 +901,24 @@ emergency_status() {
 }
 
 rotate() { # [--force]
-  local t last day_cnt old new cand resp i t0
+  local t last day_cnt old new cand resp i t0 st
   t=$(now); last=$(get last_rotation)
-  day_cnt=$(awk -v d=$((t-86400)) '$1>d' "$STATE/rotations" 2>/dev/null | wc -l)
+  day_cnt=$(awk -v d=$((t-86400)) '$1>d && NF==3' "$STATE/rotations" 2>/dev/null | wc -l)
   if [[ ${1:-} != --force ]]; then
     (( t - last < ROTATE_GAP )) && { log "смена IP: с прошлой прошло меньше часа - жду"; return 1; }
     if (( day_cnt >= MAX_ROT_PER_DAY )); then
       [[ $(get rot_limit_notified) != "$(date +%F)" ]] && { notify "лимит $MAX_ROT_PER_DAY смены IP в сутки исчерпан, а связи нет - нужна проверка вручную" mail; put rot_limit_notified "$(date +%F)"; }
       return 1
     fi
+    if (( $(get rot_fails) >= MAX_FAIL_ROT )); then
+      [[ -f $STATE/rot_fail_notified ]] || { notify "$MAX_FAIL_ROT смены IP подряд не помогли: туннель не поднимается и на новых адресах. Это не блокировка адреса - нужна проверка сервера вручную (консоль в панели Timeweb). Автосмену остановил" mail; touch "$STATE/rot_fail_notified"; }
+      return 1
+    fi
+  fi
+  st=$(tw_status)
+  if [[ $st != on ]]; then
+    log "смена IP: статус сервера в Timeweb $st, а не on - жду"; echo "смена IP отложена: статус сервера в Timeweb $st, дождитесь on"
+    return 1
   fi
   old=$(main_ipv4)
   [[ -z $old ]] && { notify "не получил текущий IP из API Timeweb" mail; return 1; }
@@ -925,7 +938,6 @@ rotate() { # [--force]
   done
   [[ -z $new ]] && { notify "смена IP: за $ROTATE_TRIES попыток не нашёл адрес, до которого доходят пакеты. Остался прежний $old, повторю через $((ROTATE_RETRY/60)) мин" mail; return 1; }
   log "новый IPv4 $new: трасса проходит"
-  put last_rotation "$t"; echo "$t $old $new" >> "$STATE/rotations"
   resp=$(api DELETE "/servers/$TIMEWEB_SERVER_ID/ips" "{\"ip\":\"$old\"}")
   sleep 5
   if all_ipv4 | grep -qx "$old"; then
@@ -939,14 +951,19 @@ rotate() { # [--force]
   tun_set_endpoint "$new"
   put keys_pending "$new"        # ключи уйдут только после нового рукопожатия
   put fails 0
-  sleep 45
-  if wait_new_handshake "$t0" 480; then
+  # проверка каждые 5 с и выход сразу, как туннель поднялся; если сервер ещё грузится (статус не on) - один раз ждём дольше
+  if wait_new_handshake "$t0" "$HS_WAIT" || { [[ $(tw_status) != on ]] && wait_new_handshake "$t0" "$HS_WAIT_EXTRA"; }; then
+    put last_rotation "$t"; echo "$t $old $new" >> "$STATE/rotations"
+    rm -f "$STATE/rot_fails" "$STATE/rot_fail_notified"
     mail_from_mirror "$new" && rm -f "$STATE/keys_pending"
     notify "IP сменён: $old → $new, туннель поднялся (новое рукопожатие), ключи разосланы" mail
     rm -f "$STATE/down_since" "$STATE"/once_*
     return 0
   fi
-  notify "IP сменён: $old → $new, но туннель за 8 мин не поднялся - ключи НЕ рассылал (разошлю, когда связь появится), делаю жёсткую перезагрузку" mail
+  echo "$t $old $new fail" >> "$STATE/rotations"
+  put rot_fails "$(( $(get rot_fails) + 1 ))"
+  put last_rotation "$(( $(now) - ROTATE_GAP + ROTATE_RETRY ))"   # неудачная смена в лимит не идёт, повтор через ROTATE_RETRY с
+  notify "IP сменён: $old → $new, но туннель за $(( $(now) - t0 )) с не поднялся (неудача $(get rot_fails) из $MAX_FAIL_ROT) - ключи НЕ рассылал (разошлю, когда связь появится), делаю жёсткую перезагрузку" mail
   touch "$STATE/rotated_in_outage"
   do_reboot hard || true
   return 1
@@ -976,6 +993,7 @@ check() {
       rm -f "$STATE/down_since" "$STATE"/once_* "$STATE/rotated_in_outage"
     fi
     put fails 0
+    rm -f "$STATE/rot_fails" "$STATE/rot_fail_notified"
     if [[ -s $STATE/keys_pending && -f $MIRROR/server.env ]]; then   # ключи ждали живого туннеля
       local pend; pend=$(get keys_pending)
       if [[ $pend == "$(tun_endpoint)" ]]; then mail_from_mirror "$pend" && rm -f "$STATE/keys_pending"; else rm -f "$STATE/keys_pending"; fi
@@ -991,7 +1009,12 @@ check() {
   [[ -f $STATE/down_since ]] || put down_since "$(now)"
   log "туннель мёртв (рукопожатие $(hs_age) с назад), минут без связи: $fails"
   (( fails < REBOOT_AT )) && return 0
-  em_active || once em_offer "основной сервер (Timeweb) недоступен $fails мин. Пробую перезагрузить его, потом сменить IP. Если нужно срочно - включите аварийный канал: ssh homeserv vampn emergency on"
+  em_active || once em_offer "основной сервер (Timeweb) недоступен $fails мин. Пробую перезагрузить его, потом сменить IP. Через $EM_AT мин без связи аварийный канал (Бостон) включится сам"
+  if (( fails >= EM_AT )) && ! em_active && [[ -f $EM_ENV && -f $MIRROR/server.env && ! -f $STATE/once_em_auto ]]; then
+    touch "$STATE/once_em_auto"        # одна попытка на аварию (флаг снимается, когда связь вернулась)
+    log "без связи $fails мин - включаю аварийный канал сам"
+    emergency_on || true
+  fi
   st=$(tw_status); t=$(now)
   case $st in
     on) ;;
