@@ -1,12 +1,12 @@
 import {useEffect, useState} from 'react';
-import {KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View} from 'react-native';
+import {KeyboardAvoidingView, Platform, Pressable, ScrollView, View} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 import {useAuth} from '../auth';
 import {cleanCode, describeError, validEmail} from '../format';
 import {ServerUrlEditor} from '../ServerUrlEditor';
-import {fontStyle, useTheme} from '../theme';
-import {Body, Btn, Field, Label, Notice, Sheet} from '../ui';
+import {useTheme} from '../theme';
+import {Body, Btn, Field, Label, Logo, Notice, Sheet} from '../ui';
 
 const RESEND_COOLDOWN = 30;
 
@@ -80,11 +80,8 @@ export function LoginScreen() {
       <ScrollView
         contentContainerStyle={{flexGrow: 1, padding: 24, paddingTop: insets.top + 48, paddingBottom: insets.bottom + 24, gap: 24}}
         keyboardShouldPersistTaps="handled">
-        <View style={{gap: 10}}>
-          <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
-            <View style={{width: 12, height: 12, borderRadius: 6, backgroundColor: t.signal}} />
-            <Text style={{color: t.text, ...fontStyle(t, 'display', '700'), fontSize: 44, letterSpacing: 1}}>vampn</Text>
-          </View>
+        <View style={{gap: 16}}>
+          <Logo />
           <Body muted>
             {step === 'email'
               ? 'Вход только для тех, кто есть в списке. Введите свою почту: на неё придёт код из 4 цифр.'

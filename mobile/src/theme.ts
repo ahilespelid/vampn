@@ -14,12 +14,14 @@ export type AppTheme = {
   muted: string;
   border: string;
   signal: string;
+  /** Красный для текста и значков на фоне темы: на тёмном светлее, чтобы читался. */
+  signalSoft: string;
   signalText: string;
   ok: string;
   button: string;
   buttonText: string;
   backdrop: string;
-  radius: {m: number; l: number};
+  radius: {m: number; l: number; card: number; hero: number; button: number};
   font: {sans: string; mono: string; display: string};
   /** Файлы шрифтов support есть в этой сборке (в Expo Go их нет). */
   fontsBundled: boolean;
@@ -59,17 +61,19 @@ export function fontStyle(theme: AppTheme, kind: FontKind, weight: FontWeight = 
   return weight === '400' ? {fontFamily: theme.font[kind]} : {fontFamily: theme.font[kind], fontWeight: weight};
 }
 
-const radius = {m: 12, l: 24};
+// m: поля ввода и плашки; card: карточки; hero: главная карточка; button: кнопки; l: переключатели и шторки.
+const radius = {m: 12, l: 24, card: 22, hero: 24, button: 16};
 
 export const lightTheme: AppTheme = {
   dark: false,
   bg: '#f4f4f2',
   surface: '#ffffff',
-  surfaceAlt: '#ecece8',
+  surfaceAlt: '#e8e8e4',
   text: '#111111',
-  muted: '#6b6b68',
+  muted: '#62625f',
   border: '#dcdcd7',
   signal: '#d71921',
+  signalSoft: '#d71921',
   signalText: '#ffffff',
   ok: '#1f8f4e',
   button: '#111111',
@@ -82,13 +86,14 @@ export const lightTheme: AppTheme = {
 
 export const darkTheme: AppTheme = {
   dark: true,
-  bg: '#000000',
-  surface: '#121212',
-  surfaceAlt: '#1c1c1c',
+  bg: '#0b0c0e',
+  surface: '#151618',
+  surfaceAlt: '#222326',
   text: '#f4f4f2',
-  muted: '#8d8d8a',
-  border: '#2a2a2a',
+  muted: '#a7a8ae',
+  border: '#292a2e',
   signal: '#d71921',
+  signalSoft: '#e8545a',
   signalText: '#ffffff',
   ok: '#3ecf7a',
   button: '#f4f4f2',

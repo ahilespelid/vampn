@@ -3,6 +3,7 @@ import {Platform} from 'react-native';
 
 import {ApiClient, normalizeBaseUrl, type LinkState, type SessionUser} from './api';
 import {defaultAppState, loadAppState, saveAppState, type AppState} from './appStore';
+import {clearLog, pushTrace} from './serverLog';
 import type {ThemeMode} from './theme';
 
 type AuthValue = {
@@ -59,7 +60,11 @@ export function AuthProvider({children}: {children: ReactNode}) {
   const resetLink = useCallback(() => {
     linkRef.current = 'ok';
     setLink('ok');
+    clearLog(); // журнал обмена относится к прежнему входу и серверу
   }, []);
+
+  // Журнал живёт, пока открыто приложение; при размонтировании чистится, чтобы не тянуть записи в новый сеанс.
+  useEffect(() => clearLog, []);
 
   const commit = useCallback((next: AppState) => {
     stateRef.current = next;
@@ -79,6 +84,7 @@ export function AuthProvider({children}: {children: ReactNode}) {
         getToken: () => stateRef.current.token,
         onUnauthorized: clearSession,
         onLink: handleLink,
+        onTrace: pushTrace,
       }),
     [state.apiUrl, clearSession, handleLink],
   );

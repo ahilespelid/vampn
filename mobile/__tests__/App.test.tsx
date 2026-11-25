@@ -154,7 +154,7 @@ test('без сессии показывается вход по почте', as
   mockServer('user');
   const renderer = await mount();
   const tree = textOf(renderer.toJSON());
-  expect(tree).toContain('vampn');
+  expect(tree).toContain('VAMPN');
   expect(tree).toContain('Вход только для тех, кто есть в списке');
   expect(tree).toContain('vamp.new.litewms.ru');
   expect(hasTestId(renderer, 'tab-service')).toBe(false);
@@ -344,5 +344,49 @@ test('сервер отвечает 502: плашка «не отвечает»,
   expect(hasTestId(renderer, 'tab-service')).toBe(true);
   expect(hasTestId(renderer, 'offline-bar')).toBe(true);
   expect(textOf(renderer.toJSON())).toContain('Сервер не отвечает');
+  await act(async () => renderer.unmount());
+});
+
+test('смена IP: внизу сразу видны запрос, команда и ожидание, затем дословный ответ сервера', async () => {
+  mockServer('user');
+  const renderer = await mount();
+  await signIn(renderer);
+
+  const base = (globalThis as {fetch: typeof fetch}).fetch;
+  let release: () => void = () => undefined;
+  (globalThis as {fetch: typeof fetch}).fetch = jest.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).endsWith('/v1/control/rotate')) {
+      await new Promise<void>(resolve => {
+        release = resolve;
+      });
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({text: 'новый адрес 203.0.113.9'}),
+        headers: {get: () => null},
+      };
+    }
+    return base(url, init);
+  }) as unknown as typeof fetch;
+
+  expect(hasTestId(renderer, 'server-log')).toBe(false);
+  await act(async () => {
+    byTestId(renderer, 'rotate', 'onPress').props.onPress();
+  });
+
+  let tree = textOf(renderer.toJSON());
+  expect(hasTestId(renderer, 'server-log')).toBe(true);
+  expect(tree).toContain('/v1/control/rotate');
+  expect(tree).toContain('vampn rotate');
+  expect(tree).toContain('ждём ответ');
+  expect(tree).not.toContain('новый адрес');
+
+  await act(async () => {
+    release();
+  });
+  await flush();
+  tree = textOf(renderer.toJSON());
+  expect(tree).toContain('HTTP 200');
+  expect(tree).toContain('новый адрес 203.0.113.9');
   await act(async () => renderer.unmount());
 });

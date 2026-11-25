@@ -110,6 +110,8 @@ type Options = {
   onUnauthorized?: () => void;
   /** Вызывается после каждого запроса: ответ получен (даже с ошибкой) или связи нет. */
   onLink?: (state: LinkState) => void;
+  /** Журнал обмена: вызывается в начале и в конце запросов, помеченных командой. */
+  onTrace?: (event: TraceEvent) => void;
   fetchImpl?: typeof fetch;
   xhrFactory?: () => XMLHttpRequest;
 };
@@ -120,7 +122,21 @@ export type NotificationStreamHandlers = {
   onEnd: (end: StreamEnd) => void;
 };
 
-type RequestOptions = {body?: unknown; auth?: boolean; timeoutMs?: number};
+/** Запись об обмене с сервером для журнала на экране: что ушло и что сервер ответил. */
+export type TraceEvent =
+  | {phase: 'start'; id: number; at: number; method: string; path: string; body?: string; command: string}
+  | {phase: 'end'; id: number; ms: number; ok: boolean; status: number; response: string};
+
+type RequestOptions = {
+  body?: unknown;
+  auth?: boolean;
+  timeoutMs?: number;
+  /** Команда vampn, которую сервер запустит по этому запросу. Только такие запросы попадают в журнал на экране. */
+  command?: string;
+};
+
+let traceCounter = 0;
+const TRACE_MAX_RESPONSE = 4000;
 
 const DEFAULT_TIMEOUT_MS = 20000;
 const CONTROL_TIMEOUT_MS = 440000; // сервер ждёт команду до 420 с
@@ -130,6 +146,7 @@ export class ApiClient {
   private getToken: () => string | null;
   private onUnauthorized?: () => void;
   private onLink?: (state: LinkState) => void;
+  private onTrace?: (event: TraceEvent) => void;
   private fetchImpl?: typeof fetch;
   private xhrFactory?: () => XMLHttpRequest;
 
@@ -138,6 +155,7 @@ export class ApiClient {
     this.getToken = options.getToken;
     this.onUnauthorized = options.onUnauthorized;
     this.onLink = options.onLink;
+    this.onTrace = options.onTrace;
     this.fetchImpl = options.fetchImpl;
     this.xhrFactory = options.xhrFactory;
   }
@@ -155,6 +173,25 @@ export class ApiClient {
       }
     }
 
+    const started = Date.now();
+    const traceId = options.command ? ++traceCounter : 0;
+    if (traceId) {
+      this.onTrace?.({
+        phase: 'start',
+        id: traceId,
+        at: started,
+        method,
+        path,
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        command: options.command ?? '',
+      });
+    }
+    const finish = (ok: boolean, status: number, shown: string) => {
+      if (traceId) {
+        this.onTrace?.({phase: 'end', id: traceId, ms: Date.now() - started, ok, status, response: shown.slice(0, TRACE_MAX_RESPONSE)});
+      }
+    };
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     let response: Response;
@@ -168,6 +205,7 @@ export class ApiClient {
       });
     } catch (error) {
       const aborted = error instanceof Error && error.name === 'AbortError';
+      finish(false, 0, aborted ? 'Нет ответа: время ожидания вышло.' : 'Нет ответа: связь оборвалась.');
       this.onLink?.(aborted ? 'timeout' : 'network');
       throw new ApiError(
         0,
@@ -182,13 +220,21 @@ export class ApiClient {
     const gateway = response.status >= 502 && response.status <= 504;
     this.onLink?.(gateway ? 'timeout' : 'ok');
 
-    const text = await response.text();
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      finish(false, response.status, 'Нет ответа: связь оборвалась на середине ответа.');
+      throw error;
+    }
     let data: Record<string, unknown> | null = null;
     try {
       data = text ? (JSON.parse(text) as Record<string, unknown>) : null;
     } catch {
       data = null;
     }
+    // В журнал идёт то, что вывела команда на сервере (поле text), а при ошибке тело ответа как есть.
+    finish(response.ok, response.status, data && typeof data.text === 'string' ? data.text : text);
 
     if (!response.ok) {
       const extra = {...(data ?? {})};
@@ -247,19 +293,31 @@ export class ApiClient {
   }
 
   server() {
-    return this.request<{text: string}>('GET', '/v1/server');
+    return this.request<{text: string}>('GET', '/v1/server', {command: 'vampn server'});
   }
 
   rotate(force: boolean) {
-    return this.request<{text: string}>('POST', '/v1/control/rotate', {body: {force}, timeoutMs: CONTROL_TIMEOUT_MS});
+    return this.request<{text: string}>('POST', '/v1/control/rotate', {
+      body: {force},
+      timeoutMs: CONTROL_TIMEOUT_MS,
+      command: `vampn rotate${force ? ' --force' : ''}`,
+    });
   }
 
   reboot(hard: boolean) {
-    return this.request<{text: string}>('POST', '/v1/control/reboot', {body: {hard}, timeoutMs: CONTROL_TIMEOUT_MS});
+    return this.request<{text: string}>('POST', '/v1/control/reboot', {
+      body: {hard},
+      timeoutMs: CONTROL_TIMEOUT_MS,
+      command: `vampn reboot${hard ? ' hard' : ''}`,
+    });
   }
 
+  /** Состояние аварийного канала приложение запрашивает само при каждой загрузке экрана, поэтому в журнал идут только включение и выключение. */
   emergency(mode: 'on' | 'off' | 'status') {
-    return this.request<{text: string}>('POST', '/v1/control/emergency', {body: {mode}});
+    return this.request<{text: string}>('POST', '/v1/control/emergency', {
+      body: {mode},
+      command: mode === 'status' ? undefined : `vampn emergency ${mode}`,
+    });
   }
 
   stats(metric = 'users_online', hours = 24) {

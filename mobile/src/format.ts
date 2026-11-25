@@ -130,3 +130,22 @@ export function notificationStatus(n: AppNotification): {label: string; tone: To
   }
   return {label: 'создано', tone: 'muted'};
 }
+
+/** Время суток с секундами: 14:05:09. */
+export function formatClock(ms: number): string {
+  const date = new Date(ms);
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+/** Длительность: «3,4 с», «45 с», «2 мин 5 с». */
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, ms) / 1000;
+  if (seconds < 10) {
+    return `${(Math.round(seconds * 10) / 10).toString().replace('.', ',')} с`;
+  }
+  const whole = Math.round(seconds);
+  if (whole < 60) {
+    return `${whole} с`;
+  }
+  return `${Math.floor(whole / 60)} мин ${whole % 60} с`;
+}

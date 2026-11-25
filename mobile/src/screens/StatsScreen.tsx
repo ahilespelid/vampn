@@ -15,6 +15,7 @@ const RANGES = [
 ] as const;
 
 const MAX_BARS = 48;
+const CHART_HEIGHT = 160;
 
 /** Сжимает ряд до MAX_BARS столбцов, беря максимум в каждой корзине. */
 export function downsample(points: StatPoint[], bars = MAX_BARS): number[] {
@@ -63,24 +64,38 @@ export function StatsScreen() {
   const last = points[points.length - 1];
 
   return (
-    <Page title="статистика" refreshing={loading} onRefresh={load}>
+    <Page title="Всё в цифрах." subtitle="Активность вашего сервера." refreshing={loading} onRefresh={load}>
       <Segmented value={range} onChange={setRange} options={RANGES.map(r => ({value: r.value, label: r.label}))} />
       {error ? <ErrorNote text={error} /> : null}
-      <Card style={{gap: 12}}>
+      <Card style={{gap: 16}}>
         <Label>подключено одновременно</Label>
         {bars.length === 0 ? (
           <Empty text={loading ? 'Загрузка…' : error ? 'Не удалось загрузить данные.' : 'Данных пока нет: сервер ещё не накопил метрики.'} />
         ) : (
           <>
-            <View style={{flexDirection: 'row', alignItems: 'flex-end', height: 120, gap: 2}}>
+            <View style={{flexDirection: 'row', alignItems: 'flex-end', height: CHART_HEIGHT, gap: 3}}>
               {bars.map((value, index) => (
                 <View
                   key={index}
-                  style={{flex: 1, height: Math.max(3, (value / peak) * 120), backgroundColor: index === bars.length - 1 ? t.signal : t.text, opacity: index === bars.length - 1 ? 1 : 0.8, borderRadius: 1}}
+                  style={{
+                    flex: 1,
+                    height: Math.max(4, (value / peak) * CHART_HEIGHT),
+                    backgroundColor: index === bars.length - 1 ? t.signal : t.text,
+                    opacity: index === bars.length - 1 ? 1 : 0.85,
+                    borderRadius: 1,
+                  }}
                 />
               ))}
             </View>
-            <View>
+            <View style={{flexDirection: 'row', justifyContent: 'space-between'}}>
+              <Body mono muted style={{fontSize: 12}}>
+                начало периода
+              </Body>
+              <Body mono muted style={{fontSize: 12}}>
+                сейчас
+              </Body>
+            </View>
+            <View style={{borderTopWidth: 1, borderTopColor: t.border, paddingTop: 12}}>
               <KV k="сейчас" v={String(last.value)} mono />
               <KV k="максимум" v={String(Math.max(...values))} mono />
               <KV k="минимум" v={String(Math.min(...values))} mono />

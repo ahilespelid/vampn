@@ -5,8 +5,9 @@ import type {ManagedUser, Role, UserEvent} from '../api';
 import {useAuth} from '../auth';
 import {describeError, eventLabel, formatDate, roleLabel, sourceLabel, validEmail, validName} from '../format';
 import {KeyActions} from '../KeyActions';
+import {useTheme} from '../theme';
 import {useReconnect} from '../useReconnect';
-import {Body, Btn, Card, Empty, ErrorNote, Field, KV, Label, Notice, Page, Pill, Segmented, Sheet} from '../ui';
+import {Body, Btn, Card, Empty, ErrorNote, Field, Label, Notice, Page, Pill, Segmented, Sheet} from '../ui';
 
 function AddUser({onDone}: {onDone: () => void}) {
   const {api} = useAuth();
@@ -203,12 +204,14 @@ function MailAll({count}: {count: number}) {
 }
 
 export function UsersScreen() {
+  const t = useTheme();
   const {api} = useAuth();
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [adding, setAdding] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -228,39 +231,57 @@ export function UsersScreen() {
 
   useReconnect(load);
 
-  const active = users.filter(u => u.active);
-  const revoked = users.filter(u => !u.active);
+  const activeTotal = users.filter(u => u.active).length;
+  const needle = query.trim().toLowerCase();
+  const shown = needle ? users.filter(u => u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle)) : users;
+  const active = shown.filter(u => u.active);
+  const revoked = shown.filter(u => !u.active);
   const current = users.find(u => u.name === selected) ?? null;
 
   const renderUser = (u: ManagedUser) => (
     <Pressable key={u.id} onPress={() => setSelected(u.name)} accessibilityRole="button" testID={`user-${u.name}`}>
-      <Card style={{gap: 4, opacity: u.active ? 1 : 0.6}}>
-        <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
+      <Card style={{flexDirection: 'row', alignItems: 'center', gap: 14, opacity: u.active ? 1 : 0.6}}>
+        <View style={{width: 40, height: 40, borderRadius: 20, backgroundColor: t.surfaceAlt, alignItems: 'center', justifyContent: 'center'}}>
+          <Body mono weight="700">
+            {u.name.slice(0, 1).toUpperCase()}
+          </Body>
+        </View>
+        <View style={{flex: 1, gap: 2}}>
           <Body mono weight="700">
             {u.name}
           </Body>
-          {u.role === 'admin' ? <Pill text="суперадмин" tone="signal" /> : null}
-        </View>
-        <Body muted mono>
-          {u.email}
-        </Body>
-        {!u.active ? (
-          <Body muted mono>
-            отозван {formatDate(u.revoked_at)}
+          <Body muted style={{fontSize: 12, lineHeight: 18}}>
+            {roleLabel(u.role)} · {u.email}
           </Body>
-        ) : null}
+          {!u.active ? (
+            <Body muted mono style={{fontSize: 12}}>
+              отозван {formatDate(u.revoked_at)}
+            </Body>
+          ) : null}
+        </View>
+        <View accessibilityLabel={u.active ? 'активен' : 'отозван'} style={{width: 8, height: 8, borderRadius: 4, backgroundColor: u.active ? t.ok : t.muted}} />
       </Card>
     </Pressable>
   );
 
   return (
-    <Page title="люди" refreshing={loading} onRefresh={load} right={<Btn small title="добавить" onPress={() => setAdding(true)} testID="add-user" />}>
+    <Page
+      title="Ваши люди."
+      subtitle="Все, с кем вы делитесь доступом."
+      refreshing={loading}
+      onRefresh={load}
+      right={<Btn small title="добавить" onPress={() => setAdding(true)} testID="add-user" />}>
       {error ? <ErrorNote text={error} /> : null}
-      <KV k="активных" v={String(active.length)} mono />
-      <MailAll count={active.length} />
+      <Field testID="users-search" label="Найти пользователя" value={query} onChangeText={setQuery} placeholder="имя или почта" />
+      <Label>
+        активных · {activeTotal}
+        {needle ? ` · найдено ${shown.length}` : ''}
+      </Label>
+      <MailAll count={activeTotal} />
       {active.map(renderUser)}
       {users.length === 0 && !loading && !error ? <Empty text="Список пуст" /> : null}
-      {revoked.length > 0 ? <Label style={{marginTop: 8}}>отозванные · {revoked.length}</Label> : null}
+      {users.length > 0 && shown.length === 0 ? <Empty text="Никого не нашлось" /> : null}
+      {revoked.length > 0 ? <Label>отозванные · {revoked.length}</Label> : null}
       {revoked.map(renderUser)}
 
       <Sheet visible={adding} onClose={() => setAdding(false)} title="Новый пользователь">

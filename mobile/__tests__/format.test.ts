@@ -70,7 +70,7 @@ test('статус уведомления: от создания до прочт
 });
 
 test('тема: авто следует системе', () => {
-  expect(resolveTheme('auto', true).bg).toBe('#000000');
+  expect(resolveTheme('auto', true).bg).toBe('#0b0c0e');
   expect(resolveTheme('auto', false).bg).toBe('#f4f4f2');
   expect(resolveTheme('light', true).dark).toBe(false);
   expect(resolveTheme('dark', false).dark).toBe(true);

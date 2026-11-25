@@ -17,7 +17,7 @@ export function SettingsScreen() {
     ]);
 
   return (
-    <Page title="ещё">
+    <Page title="На вашей стороне." subtitle="Аккаунт, оформление и подключение.">
       <Card style={{gap: 10}}>
         <Label>аккаунт</Label>
         <Body mono>{user?.email}</Body>
