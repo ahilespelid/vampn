@@ -71,6 +71,25 @@ describe('ApiClient', () => {
     expect(calls[0].url).toBe('https://api.example.com/v1/keys/a%20b/link?notification_id=7');
   });
 
+  test('ключ приходит вместе с .conf для QR', async () => {
+    const {api} = client(() => ({body: {name: 'a', link: 'vpn://x', conf: '[Interface]\nAddress = 1'}}));
+    const key = await api.keyLink('a');
+    expect(key.link).toBe('vpn://x');
+    expect(key.conf).toContain('[Interface]');
+  });
+
+  test('рассылка ключей всем: POST с долгим таймаутом, статус рассылки: GET', async () => {
+    const a = client(() => ({body: {ok: false, summary: 'ИТОГ: принято 2 из 3, не ушло: b'}}));
+    const out = await a.api.adminResendAll();
+    expect(a.calls[0].url).toBe('https://api.example.com/v1/admin/keys/resend-all');
+    expect(a.calls[0].init.method).toBe('POST');
+    expect(out).toEqual({ok: false, summary: 'ИТОГ: принято 2 из 3, не ушло: b'});
+    const b = client(() => ({body: {ok: true, text: 'ИМЯ ПОЧТА'}}));
+    expect((await b.api.adminMailStatus()).text).toBe('ИМЯ ПОЧТА');
+    expect(b.calls[0].url).toBe('https://api.example.com/v1/admin/mail-status');
+    expect(b.calls[0].init.method).toBe('GET');
+  });
+
   test('неверный код отдаёт число оставшихся попыток', async () => {
     const {api} = client(() => ({status: 401, body: {error: 'invalid_code', message: 'неверный код', attempts_left: 3}}), null);
     const error = await api.verify('a@example.com', '0000').catch(e => e);

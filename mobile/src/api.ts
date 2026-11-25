@@ -35,6 +35,9 @@ export type AppNotification = {
   created_at: string;
 };
 
+/** Ключ пользователя: link - строка vpn:// (в приложении называется «ключ (токен)»), conf - для QR. */
+export type KeyToken = {name: string; link: string; conf?: string | null};
+
 export type ManagedUser = {
   id: number;
   name: string;
@@ -272,7 +275,17 @@ export class ApiClient {
 
   keyLink(name: string, notificationId?: number) {
     const query = notificationId ? `?notification_id=${notificationId}` : '';
-    return this.request<{name: string; link: string}>('POST', `/v1/keys/${encodeURIComponent(name)}/link${query}`);
+    return this.request<KeyToken>('POST', `/v1/keys/${encodeURIComponent(name)}/link${query}`);
+  }
+
+  /** Разослать ключ всем заново (суперадмин). Сервер повторяет неушедшие письма сам, поэтому ждём долго. */
+  adminResendAll() {
+    return this.request<{ok: boolean; summary: string}>('POST', '/v1/admin/keys/resend-all', {timeoutMs: 300000});
+  }
+
+  /** Кому и когда ушёл ключ, у кого отправка не удалась (суперадмин). */
+  adminMailStatus() {
+    return this.request<{ok: boolean; text: string}>('GET', '/v1/admin/mail-status', {timeoutMs: 30000});
   }
 
   keyResend(name: string) {

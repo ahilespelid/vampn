@@ -146,6 +146,62 @@ function UserDetail({user, onChanged}: {user: ManagedUser; onChanged: () => void
   );
 }
 
+/** Суперадмин: разослать ключ всем заново и посмотреть, кому и когда он ушёл. */
+function MailAll({count}: {count: number}) {
+  const {api} = useAuth();
+  const [busy, setBusy] = useState<'' | 'send' | 'status'>('');
+  const [result, setResult] = useState<{kind: 'error' | 'info'; text: string} | null>(null);
+  const [report, setReport] = useState('');
+
+  const send = () =>
+    Alert.alert('Отправить ключ всем?', `Ключ получат все активные пользователи (${count}) на почту. Старые ключи продолжат работать. Это займёт до пары минут.`, [
+      {text: 'Отмена', style: 'cancel'},
+      {
+        text: 'Отправить',
+        onPress: async () => {
+          setBusy('send');
+          setResult(null);
+          try {
+            const out = await api.adminResendAll();
+            setResult({kind: out.ok ? 'info' : 'error', text: out.summary || (out.ok ? 'Готово.' : 'Не всем ключ ушёл.')});
+          } catch (err) {
+            setResult({kind: 'error', text: describeError(err)});
+          } finally {
+            setBusy('');
+          }
+        },
+      },
+    ]);
+
+  const status = async () => {
+    setBusy('status');
+    setResult(null);
+    try {
+      setReport((await api.adminMailStatus()).text);
+    } catch (err) {
+      setResult({kind: 'error', text: describeError(err)});
+    } finally {
+      setBusy('');
+    }
+  };
+
+  return (
+    <Card style={{gap: 10}}>
+      <Label>рассылка ключей</Label>
+      <View style={{flexDirection: 'row', gap: 8, flexWrap: 'wrap'}}>
+        <Btn small title="ключ всем заново" onPress={send} busy={busy === 'send'} disabled={!!busy} testID="resend-all" />
+        <Btn small kind="ghost" title="кому ушло" onPress={status} busy={busy === 'status'} disabled={!!busy} testID="mail-status" />
+      </View>
+      {result ? <Notice kind={result.kind} text={result.text} /> : null}
+      <Sheet visible={!!report} onClose={() => setReport('')} title="Кому ушёл ключ">
+        <Card>
+          <Body mono>{report}</Body>
+        </Card>
+      </Sheet>
+    </Card>
+  );
+}
+
 export function UsersScreen() {
   const {api} = useAuth();
   const [users, setUsers] = useState<ManagedUser[]>([]);
@@ -201,6 +257,7 @@ export function UsersScreen() {
     <Page title="люди" refreshing={loading} onRefresh={load} right={<Btn small title="добавить" onPress={() => setAdding(true)} testID="add-user" />}>
       {error ? <ErrorNote text={error} /> : null}
       <KV k="активных" v={String(active.length)} mono />
+      <MailAll count={active.length} />
       {active.map(renderUser)}
       {users.length === 0 && !loading && !error ? <Empty text="Список пуст" /> : null}
       {revoked.length > 0 ? <Label style={{marginTop: 8}}>отозванные · {revoked.length}</Label> : null}
