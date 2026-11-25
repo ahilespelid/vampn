@@ -10,7 +10,7 @@
 #   vampn list             пользователи VPN и их последнее подключение
 #   vampn reissue ИМЯ      перевыпустить ключ (старый перестаёт работать), новый уйдёт на почту
 #   vampn resend ИМЯ       отправить текущий ключ на почту ещё раз
-#   vampn resend-all       отправить текущий ключ ВСЕМ из users.conf заново (с повтором неушедших и тревогой в Telegram)
+#   vampn resendall       отправить текущий ключ ВСЕМ из users.conf заново (с повтором неушедших и тревогой в Telegram)
 #   vampn mailstatus       кому и когда ушёл ключ, у кого отправка не удалась
 #   vampn keyconf ИМЯ      показать .conf ключа (из него приложение строит QR)
 #   vampn link ИМЯ         показать строку vpn:// пользователя
@@ -763,6 +763,7 @@ API=https://api.timeweb.cloud/api/v1
 HS_FRESH=45 PROBE_TRIES=3 PROBE_TIMEOUT=3 PROBE_HOST=10.77.0.1
 REBOOT_AT=2 ROTATE_AT=5 REBOOT_GAP=$((30*60)) ROTATE_GAP=$((60*60)) ROTATE_RETRY=180 ROTATE_TRIES=6 ROUTE_MIN_HOP=4
 MAX_ROT_PER_DAY=4 MIRROR_EVERY=600
+IP_LIMIT=10 IP_RESERVE=2   # Timeweb даёт 10 новых IP в сутки (считается каждый кандидат, даже удалённый); 2 оставляем на ручную смену
 EM_AT=3 HS_WAIT=150 HS_WAIT_EXTRA=120 MAX_FAIL_ROT=3
 SSH_SRV=(ssh -T -o LogLevel=ERROR -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10
          -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/vampn/mirror.known_hosts)
@@ -776,6 +777,41 @@ notify() { # текст [mail]
 once() { # ключ текст - одно сообщение на одну аварию (флаги сбрасываются, когда связь вернулась)
   [[ -f $STATE/once_$1 ]] && return 0
   touch "$STATE/once_$1"; notify "$2" mail
+}
+throttle() { # ключ секунд текст [mail] - одно и то же сообщение не чаще раза в N секунд; пока причина держится, Telegram не засоряется
+  local key=$1 gap=$2 t; t=$(now)
+  if (( t - $(get "thr_$key") < gap )); then log "(повтор, без уведомления) $3"; return 0; fi
+  put "thr_$key" "$t"; notify "$3" "${4:-}"
+}
+# --- лимит Timeweb на создание IP ---
+until_active() { # имя метки со сроком: 0, пока срок не вышел; просроченную метку убирает вместе с «уже сообщал»
+  local u; u=$(get "$1")
+  (( u > $(now) )) && return 0
+  [[ -e $STATE/$1 ]] && rm -f "$STATE/$1" "$STATE/thr_limit"
+  return 1
+}
+rot_blocked() { until_active rot_blocked_until; }   # срок назвал сам Timeweb: IP не создать, ждёт и ручная смена
+rot_paused() { until_active rot_paused_until; }     # наш резерв: автосмена ждёт, ручная --force проходит
+rot_wait_until() { local a b; a=$(get rot_blocked_until); b=$(get rot_paused_until); echo $(( a > b ? a : b )); }
+block_until() { # метка метка-времени текст: ставит паузу смены IP и один раз сообщает
+  put "$1" "$2"
+  throttle limit $((6*3600)) "$3 Автосмену IP поставил на паузу до $(TZ=Europe/Moscow date -d @"$2" '+%d.%m %H:%M') МСК, до тех пор об этом больше не пишу." mail
+}
+tw_limit_block() { # $1 - ответ API на создание IP; 0, если это daily_limit_exceeded (срок берётся из ответа)
+  local ts
+  [[ $(jq -r '.error_code // empty' <<<"$1" 2>/dev/null) == daily_limit_exceeded ]] || return 1
+  ts=$(date -d "$(jq -r '.details.available_date_for_creation // empty' <<<"$1" 2>/dev/null)" +%s 2>/dev/null) || ts=""
+  [[ $ts =~ ^[0-9]+$ ]] && (( ts > $(now) )) || ts=$(( $(now) + 3600 ))
+  block_until rot_blocked_until "$ts" "Timeweb: лимит новых IP в сутки исчерпан ($IP_LIMIT)."
+}
+ip_created() { echo "$(now)" >> "$STATE/ip_creations"; tail -n 50 "$STATE/ip_creations" > "$STATE/ip_creations.n" && mv -f "$STATE/ip_creations.n" "$STATE/ip_creations"; }
+ip_used_24h() { awk -v d=$(( $(now) - 86400 )) '$1>d' "$STATE/ip_creations" 2>/dev/null | wc -l; }
+ip_budget_ok() { # свои же счётчики: автосмена не берёт последние IP_RESERVE создаваний суток
+  local used; used=$(ip_used_24h)
+  (( used < IP_LIMIT - IP_RESERVE )) && return 0
+  block_until rot_paused_until "$(awk -v d=$(( $(now) - 86400 )) '$1>d{print $1+86400+60; exit}' "$STATE/ip_creations")" \
+    "За сутки уже создано $used новых IP из $IP_LIMIT (лимит Timeweb), $IP_RESERVE оставляю на ручную смену."
+  return 1
 }
 tw_init() {
   set -a; . /etc/vampn/timeweb.env; set +a
@@ -953,8 +989,13 @@ emergency_status() {
 }
 
 rotate() { # [--force]
-  local t last day_cnt old new cand resp i t0 st
+  local t last day_cnt old new cand resp i t0 st ipsj
   t=$(now); last=$(get last_rotation)
+  if rot_blocked || { [[ ${1:-} != --force ]] && rot_paused; }; then   # лимит на создание IP: не дёргаем API и молчим в Telegram, пока срок не выйдет
+    log "смена IP: новые IP создавать нельзя до $(date -d @"$(rot_wait_until)" '+%F %T') (лимит Timeweb) - жду"
+    [[ ${1:-} == --force ]] && echo "смена IP невозможна: Timeweb не даёт создавать новые IP до $(TZ=Europe/Moscow date -d @"$(rot_wait_until)" '+%d.%m %H:%M') МСК"
+    return 1
+  fi
   day_cnt=$(awk -v d=$((t-86400)) '$1>d && NF==3' "$STATE/rotations" 2>/dev/null | wc -l)
   if [[ ${1:-} != --force ]]; then
     (( t - last < ROTATE_GAP )) && { log "смена IP: с прошлой прошло меньше часа - жду"; return 1; }
@@ -972,30 +1013,44 @@ rotate() { # [--force]
     log "смена IP: статус сервера в Timeweb $st, а не on - жду"; echo "смена IP отложена: статус сервера в Timeweb $st, дождитесь on"
     return 1
   fi
-  old=$(main_ipv4)
-  [[ -z $old ]] && { notify "не получил текущий IP из API Timeweb" mail; return 1; }
-  log "смена IP: старт, старый $old"
+  [[ ${1:-} == --force ]] || ip_budget_ok || return 1
+  ipsj=$(ips_json)
+  if ! jq -e '.server_ips | type == "array"' >/dev/null 2>&1 <<<"$ipsj"; then
+    throttle ips_api 3600 "не получил список IP из API Timeweb: $(head -c 200 <<<"$ipsj")" mail; return 1
+  fi
+  old=$(jq -r '[.server_ips[]? | select(.type=="ipv4")] | (map(select(.is_main)) + .)[0].ip // empty' <<<"$ipsj")
+  if [[ -z $old ]]; then   # список получен, но IPv4 у сервера нет вообще: нечего удалять, просто заводим новый
+    throttle noip $((6*3600)) "у сервера в Timeweb сейчас нет ни одного IPv4. Создаю новый (удалять нечего)." mail
+  fi
+  log "смена IP: старт, старый ${old:--}"
   put last_rotation "$(( t - ROTATE_GAP + ROTATE_RETRY ))"   # если подобрать адрес не выйдет - повтор через ROTATE_RETRY с
   new=""
   for ((i=1; i<=ROTATE_TRIES; i++)); do
+    [[ ${1:-} == --force ]] || ip_budget_ok || return 1
     resp=$(api POST "/servers/$TIMEWEB_SERVER_ID/ips" '{"type":"ipv4"}')
     cand=$(jq -r '.server_ip.ip // empty' <<<"$resp" 2>/dev/null)
-    [[ -z $cand ]] && { notify "Timeweb не выдал новый IPv4: $(head -c 300 <<<"$resp")" mail; return 1; }
-    log "кандидат $i/$ROTATE_TRIES: $cand"
+    if [[ -z $cand ]]; then
+      tw_limit_block "$resp" || throttle ip_err 3600 "Timeweb не выдал новый IPv4: $(head -c 300 <<<"$resp")" mail
+      return 1
+    fi
+    ip_created
+    log "кандидат $i/$ROTATE_TRIES: $cand (за сутки создано $(ip_used_24h) из $IP_LIMIT)"
     sleep 3
     if ip_routed "$cand"; then new=$cand; break; fi
     log "адрес $cand не проходит (трасса с homeserv обрывается) - убираю"
     api DELETE "/servers/$TIMEWEB_SERVER_ID/ips" "{\"ip\":\"$cand\"}" >/dev/null
     sleep 4
   done
-  [[ -z $new ]] && { notify "смена IP: за $ROTATE_TRIES попыток не нашёл адрес, до которого доходят пакеты. Остался прежний $old, повторю через $((ROTATE_RETRY/60)) мин" mail; return 1; }
+  [[ -z $new ]] && { throttle noroute 3600 "смена IP: за $ROTATE_TRIES попыток не нашёл адрес, до которого доходят пакеты. Остался прежний ${old:--}, повторю через $((ROTATE_RETRY/60)) мин (за сутки создано IP: $(ip_used_24h) из $IP_LIMIT)" mail; return 1; }
   log "новый IPv4 $new: трасса проходит"
-  resp=$(api DELETE "/servers/$TIMEWEB_SERVER_ID/ips" "{\"ip\":\"$old\"}")
-  sleep 5
-  if all_ipv4 | grep -qx "$old"; then
-    notify "старый IP $old не удалился ($(head -c 200 <<<"$resp")), новый $new добавлен - проверьте панель Timeweb" mail
-  else
-    log "старый IPv4 $old удалён"
+  if [[ -n $old ]]; then
+    resp=$(api DELETE "/servers/$TIMEWEB_SERVER_ID/ips" "{\"ip\":\"$old\"}")
+    sleep 5
+    if all_ipv4 | grep -qx "$old"; then
+      notify "старый IP $old не удалился ($(head -c 200 <<<"$resp")), новый $new добавлен - проверьте панель Timeweb" mail
+    else
+      log "старый IPv4 $old удалён"
+    fi
   fi
   sleep 20                       # даём Timeweb довести новый адрес до сервера
   do_reboot || true
@@ -1005,17 +1060,17 @@ rotate() { # [--force]
   put fails 0
   # проверка каждые 5 с и выход сразу, как туннель поднялся; если сервер ещё грузится (статус не on) - один раз ждём дольше
   if wait_new_handshake "$t0" "$HS_WAIT" || { [[ $(tw_status) != on ]] && wait_new_handshake "$t0" "$HS_WAIT_EXTRA"; }; then
-    put last_rotation "$t"; echo "$t $old $new" >> "$STATE/rotations"
+    put last_rotation "$t"; echo "$t ${old:--} $new" >> "$STATE/rotations"
     rm -f "$STATE/rot_fails" "$STATE/rot_fail_notified"
     mail_from_mirror "$new" && rm -f "$STATE/keys_pending"
-    notify "IP сменён: $old → $new, туннель поднялся (новое рукопожатие), ключи разосланы" mail
+    notify "IP сменён: ${old:--} → $new, туннель поднялся (новое рукопожатие), ключи разосланы" mail
     rm -f "$STATE/down_since" "$STATE"/once_*
     return 0
   fi
-  echo "$t $old $new fail" >> "$STATE/rotations"
+  echo "$t ${old:--} $new fail" >> "$STATE/rotations"
   put rot_fails "$(( $(get rot_fails) + 1 ))"
   put last_rotation "$(( $(now) - ROTATE_GAP + ROTATE_RETRY ))"   # неудачная смена в лимит не идёт, повтор через ROTATE_RETRY с
-  notify "IP сменён: $old → $new, но туннель за $(( $(now) - t0 )) с не поднялся (неудача $(get rot_fails) из $MAX_FAIL_ROT) - ключи НЕ рассылал (разошлю, когда связь появится), делаю жёсткую перезагрузку" mail
+  notify "IP сменён: ${old:--} → $new, но туннель за $(( $(now) - t0 )) с не поднялся (неудача $(get rot_fails) из $MAX_FAIL_ROT) - ключи НЕ рассылал (разошлю, когда связь появится), делаю жёсткую перезагрузку" mail
   touch "$STATE/rotated_in_outage"
   do_reboot hard || true
   return 1
@@ -1095,6 +1150,7 @@ status() {
   echo "аварийный    : $(em_active && echo "ВКЛЮЧЁН - трафик через Бостон" || echo "выключен")"
   local lm; lm=$(get last_mirror)
   echo "копия данных : $( ((lm)) && date -d @"$lm" '+%F %T' || echo нет), пользователей $(ls "$MIRROR"/clients/*.env 2>/dev/null | wc -l)"
+  echo "новые IP     : за сутки создано $(ip_used_24h) из $IP_LIMIT (лимит Timeweb)$({ rot_blocked || rot_paused; } && echo "; автосмена на паузе до $(TZ=Europe/Moscow date -d @"$(rot_wait_until)" '+%d.%m %H:%M') МСК")"
   echo "смены IP     :"; tail -5 "$STATE/rotations" 2>/dev/null | while read -r t o n; do echo "  $(date -d @"$t" '+%F %T') $o -> $n"; done
   echo "журнал       :"; tail -6 "$STATE/vampn.log" 2>/dev/null | sed 's/^/  /'
 }
@@ -1129,7 +1185,7 @@ mail_watch() {    # сторож: неудачные письма с ключо�
     if (( cnt >= MAIL_RETRY_MAX )); then
       if [[ ! -f $STATE/mail_gaveup_$n ]]; then
         touch "$STATE/mail_gaveup_$n"
-        notify "ключ для $n не ушёл и после $MAIL_RETRY_MAX повторов ($det). Проверьте адрес в users.conf или пароль почты, потом vampn resend-all"
+        notify "ключ для $n не ушёл и после $MAIL_RETRY_MAX повторов ($det). Проверьте адрес в users.conf или пароль почты, потом vampn resendall"
       fi
       continue
     fi
@@ -1144,7 +1200,7 @@ mail_watch() {    # сторож: неудачные письма с ключо�
   done <<<"$failed"
 }
 
-resend_all() {    # vampn resend-all: текущий ключ всем из users.conf, неушедшим - ещё раз, итог и тревога
+resend_all() {    # vampn resendall: текущий ключ всем из users.conf, неушедшим - ещё раз, итог и тревога
   exec 8>"$STATE/mail.lock"; flock -w 300 8
   em_active && die "сейчас аварийный режим: ключи основного сервера не рассылаю. Сначала vampn emergency off"
   [[ -f $MIRROR/server.env ]] || die "нет копии данных VPN-сервера ($MIRROR): рассылать нечего (vampn mirror)"
@@ -1200,7 +1256,7 @@ mailstatus() {    # vampn mailstatus: по каждому из users.conf - по
   done < "$USERS_CONF"
   echo
   echo "«принято» - почтовый сервер взял письмо; дойдёт ли оно до ящика (не спам ли), он не сообщает."
-  echo "Ключ всегда можно получить и в приложении vampn по логину. Отправить всем заново: vampn resend-all"
+  echo "Ключ всегда можно получить и в приложении vampn по логину. Отправить всем заново: vampn resendall"
   (( bad )) && return 1 || return 0
 }
 
@@ -1209,7 +1265,7 @@ home_main() {
   case $cmd in
     mail)       mailpy --relay; return ;;            # письма от VPN-сервера (принудительная команда ключа)
     alert)      mailpy --alert "${2:-vampn}"; return ;;
-    resend-all) resend_all; return ;;
+    resendall) resend_all; return ;;
     mailstatus) mailstatus; return ;;
     keyconf)    key_local conf "${2:-}" || die "нет актуальной копии ключа ${2:-} (vampn mirror)"; return ;;
   esac

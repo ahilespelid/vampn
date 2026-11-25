@@ -46,8 +46,15 @@ tw_status() { local n; n=$(cat "$T/twn" 2>/dev/null || echo 0); echo $((n+1)) > 
 emergency_on() { echo emergency-on >> "$CALLS"; }
 # Timeweb: POST отдаёт адреса по очереди, DELETE пишет в журнал
 NEXT=0
+ips_json() { # список IP, как отдаёт Timeweb (первый - основной); IPS_BROKEN=1 - API отдаёт ошибку без списка
+  [[ -n ${IPS_BROKEN:-} ]] && { echo '{"status_code":502,"message":"Bad gateway"}'; return; }
+  local l; l=$(jq -R -s 'split("\n") | map(select(length>0)) | map({type:"ipv4", ip:., is_main:false})' "$T/ips" 2>/dev/null) || l='[]'
+  echo "{\"server_ips\":${l:-[]}}"
+}
+LIMIT_JSON=""   # непустой - POST отвечает ошибкой daily_limit_exceeded
 api() {
-  if [[ $1 == POST ]]; then local c n; n=$(cat "$T/next" 2>/dev/null || echo 0); c=$(sed -n "$((n+1))p" "$T/cands"); echo $((n+1)) > "$T/next"; echo "POST-ip $c" >> "$CALLS"; echo "$c" >> "$T/ips"
+  if [[ $1 == POST && -n $LIMIT_JSON ]]; then echo "POST-limit" >> "$CALLS"; echo "$LIMIT_JSON"
+  elif [[ $1 == POST ]]; then local c n; n=$(cat "$T/next" 2>/dev/null || echo 0); c=$(sed -n "$((n+1))p" "$T/cands"); echo $((n+1)) > "$T/next"; echo "POST-ip $c" >> "$CALLS"; echo "$c" >> "$T/ips"
     echo "{\"server_ip\":{\"ip\":\"$c\"}}"
   elif [[ $1 == DELETE ]]; then local d; d=$(jq -r .ip <<<"$3"); echo "DELETE-ip $d" >> "$CALLS"; sed -i "/^$d\$/d" "$T/ips"; echo '{}'
   else echo '{}'; fi
@@ -127,6 +134,62 @@ reset; printf '9.9.9.9\n' > "$T/ips"; printf 'E1\n' > "$T/cands"; rm -f "$T/next
 printf '%s a b fail\n%s a b fail\n%s a b fail\n%s a b fail\n' 999000 999100 999200 999300 > "$STATE/rotations"; put last_rotation 0
 rotate >/dev/null 2>&1; rc=$?
 ok "четыре неудачи за сутки не блокируют смену" "[[ $rc == 0 ]] && grep -q POST-ip $CALLS"
+
+echo "== 3е. лимит Timeweb на создание IP: одно сообщение, пауза до названного срока, API не дёргаем"
+LIM='{"status_code":403,"error_code":"daily_limit_exceeded","message":"Daily limit exceeded","details":{"limit":10,"available_date_for_creation":"1970-01-13T00:00:00.000Z"}}'
+UNTIL=1036800
+reset; printf '9.9.9.9\n' > "$T/ips"; printf 'L1\n' > "$T/cands"; rm -f "$T/next"; HS=1; routed_list L1; LIMIT_JSON=$LIM
+rotate >/dev/null 2>&1; rc=$?
+ok "rotate вернул 1, старый адрес цел" "[[ $rc == 1 ]] && [[ \$(cat $T/ips | tr '\n' ' ') == '9.9.9.9 ' ]]"
+ok "срок паузы взят из ответа Timeweb" "[[ \$(get rot_blocked_until) == $UNTIL ]]"
+ok "ровно одно сообщение о лимите" "[[ \$(grep -c 'NOTIFY Timeweb: лимит новых IP' $CALLS) == 1 ]]"
+ok "в сообщении срок по Москве (13.01 03:00)" "grep -q '13.01 03:00 МСК' $CALLS"
+ok "сообщения «Timeweb не выдал новый IPv4» нет" "! grep -q 'не выдал новый IPv4' $CALLS"
+: > "$CALLS"; FAKE_NOW=1000200; put last_rotation 0
+for i in 1 2 3 4 5; do rotate >/dev/null 2>&1; FAKE_NOW=$((FAKE_NOW+60)); done
+ok "пять минут подряд: ни одного запроса в Timeweb" "! grep -q 'POST-' $CALLS"
+ok "пять минут подряд: ни одного сообщения" "! grep -q NOTIFY $CALLS"
+out=$(rotate --force 2>&1); rc=$?
+ok "ручная --force тоже сообщает причину и ждёт" "[[ \$rc == 1 && \$out == *'до 13.01 03:00 МСК'* ]] && ! grep -q 'POST-' $CALLS"
+FAKE_NOW=$((UNTIL+10)); LIMIT_JSON=""; : > "$CALLS"
+rotate >/dev/null 2>&1; rc=$?
+ok "после срока пауза снята и смена идёт" "[[ $rc == 0 ]] && [[ ! -e $STATE/rot_blocked_until ]] && grep -q 'POST-ip L1' $CALLS"
+echo "== 3ж. сервер без IPv4 (потерялся): создаём новый, удалять нечего"
+reset; : > "$T/ips"; printf 'N1\n' > "$T/cands"; rm -f "$T/next"; HS=1; routed_list N1
+rotate >/dev/null 2>&1; rc=$?
+ok "rotate вернул 0" "[[ $rc == 0 ]]"
+ok "создан N1, ничего не удалялось" "grep -q 'POST-ip N1' $CALLS && ! grep -q 'DELETE-ip' $CALLS"
+ok "одно сообщение «нет ни одного IPv4»" "[[ \$(grep -c 'нет ни одного IPv4' $CALLS) == 1 ]]"
+ok "смена записана тремя полями (прочерк вместо старого)" "grep -qE '^[0-9]+ - N1$' $STATE/rotations"
+ok "ключи ушли на N1" "grep -q 'keys-mail N1' $CALLS"
+echo "== 3з. API Timeweb не отдаёт список IP: не гадаем, не создаём, не спамим"
+reset; printf '9.9.9.9\n' > "$T/ips"; printf 'Q1\n' > "$T/cands"; rm -f "$T/next"; HS=1; routed_list Q1; IPS_BROKEN=1
+rotate >/dev/null 2>&1; rc=$?
+ok "rotate вернул 1, IP не создавался" "[[ $rc == 1 ]] && ! grep -q 'POST-' $CALLS"
+ok "одно сообщение про список IP" "[[ \$(grep -c 'NOTIFY не получил список IP' $CALLS) == 1 ]]"
+: > "$CALLS"; FAKE_NOW=$((FAKE_NOW+300)); put last_rotation 0; rotate >/dev/null 2>&1
+ok "через 5 минут повторно не пишет" "! grep -q NOTIFY $CALLS"
+FAKE_NOW=$((FAKE_NOW+3700)); put last_rotation 0; rotate >/dev/null 2>&1
+ok "через час напоминает один раз" "[[ \$(grep -c 'NOTIFY не получил список IP' $CALLS) == 1 ]]"
+IPS_BROKEN=""
+echo "== 3и. свой резерв: автосмена не берёт последние 2 из 10 создавании за сутки"
+reset; printf '9.9.9.9\n' > "$T/ips"; printf 'R1\nR2\n' > "$T/cands"; rm -f "$T/next"; HS=1; routed_list R1 R2
+for k in 8 7 6 5 4 3 2 1; do echo $((FAKE_NOW-3600*k)) >> "$STATE/ip_creations"; done   # по возрастанию времени, как пишет сам vampn
+rotate >/dev/null 2>&1; rc=$?
+ok "автосмена не пошла (создано 8 из 10)" "[[ $rc == 1 ]] && ! grep -q 'POST-' $CALLS"
+ok "одно сообщение про резерв" "[[ \$(grep -c 'уже создано 8 новых IP из 10' $CALLS) == 1 ]]"
+ok "пауза до освобождения самого раннего слота (+сутки+минута)" "[[ \$(get rot_paused_until) == \$((FAKE_NOW-3600*8+86400+60)) ]]"
+: > "$CALLS"; rotate >/dev/null 2>&1
+ok "повторный вызов тих и не ходит в API" "! grep -q 'POST-' $CALLS && ! grep -q NOTIFY $CALLS"
+: > "$CALLS"; rotate --force >/dev/null 2>&1; rc=$?
+ok "ручная --force резерв использует" "[[ $rc == 0 ]] && grep -q 'POST-ip R1' $CALLS"
+ok "создание записано в счётчик" "[[ \$(ip_used_24h) == 9 ]]"
+echo "== 3к. подбор адресов не должен выходить за резерв посреди цикла"
+reset; printf '9.9.9.9\n' > "$T/ips"; printf 'S1\nS2\nS3\nS4\nS5\nS6\n' > "$T/cands"; rm -f "$T/next"; HS=1; routed_list none
+for k in 5 4 3 2 1; do echo $((FAKE_NOW-3600*k)) >> "$STATE/ip_creations"; done
+rotate >/dev/null 2>&1; rc=$?
+ok "создано только 3 кандидата (5+3=8) и остановка" "[[ $rc == 1 ]] && [[ \$(grep -c 'POST-ip' $CALLS) == 3 ]]"
+ok "кандидаты убраны, старый остался" "[[ \$(cat $T/ips | tr '\n' ' ') == '9.9.9.9 ' ]]"
 
 echo "== 4. отложенная рассылка в check() после настоящей связи"
 reset; echo C1 > "$T/ep"; put keys_pending C1; put fails 3
