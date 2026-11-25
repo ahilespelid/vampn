@@ -20,6 +20,7 @@
 #   vampn reboot [hard]    перезагрузить VPN-сервер через API Timeweb
 #   vampn sync             подтянуть текущий IP из Timeweb в туннель
 #   vampn mirror           скопировать данные пользователей с VPN-сервера сейчас
+#   vampn deploy           отправить этот скрипт на Бостон и активный VPN-сервер заново (сам отправляется, когда скрипт изменился)
 #   vampn emergency on     включить аварийный канал (Бостон): VPN и Telegram через него, ключи на почту
 #   vampn emergency off    выключить вручную (сам выключается, когда Timeweb 3 минуты снова отвечает)
 #   vampn emergency        состояние аварийного режима
@@ -28,7 +29,7 @@
 # Настройки (homeserv, /etc/vampn): timeweb.env - токен Timeweb, secrets.env - почта,
 #   users.conf - пользователи (ИМЯ ПОЧТА; сохранили - через минуту применено, ключи разосланы).
 # Служебные (их вызывают таймер и ключи между серверами): check, users-push, remote, mail,
-#   alert, conf, qr, _mail, _endpoint-change. Журнал отправки писем: /var/lib/vampn/mail-status.tsv.
+#   alert, conf, qr, _mail, _endpoint-change, selfupdate. Журнал отправки писем: /var/lib/vampn/mail-status.tsv.
 set -uo pipefail
 SELF=/usr/local/sbin/vampn
 STATE=/var/lib/vampn
@@ -677,7 +678,7 @@ server_main() {
     remote)  # принудительная команда ключа homeserv: разрешён только этот список действий
       local a; read -r -a a <<<"${SSH_ORIGINAL_COMMAND:-users-push}"
       case ${a[0]:-} in
-        users-push|list|status) exec "$SELF" "${a[0]}" ;;
+        users-push|list|status|selfupdate) exec "$SELF" "${a[0]}" ;;
         reissue|resend|link)    exec "$SELF" "${a[0]}" "${a[1]:-}" ;;
         *) die "команда не разрешена: ${a[0]:-}" ;;
       esac ;;
@@ -728,7 +729,7 @@ emergency_main() {
   case ${1:-} in
     remote)  # принудительная команда ключа homeserv
       local a; read -r -a a <<<"${SSH_ORIGINAL_COMMAND:-}"
-      case ${a[0]:-} in on|off|status) exec "$SELF" "${a[0]}" ;; *) die "команда не разрешена: ${a[0]:-}" ;; esac ;;
+      case ${a[0]:-} in on|off|status|selfupdate) exec "$SELF" "${a[0]}" ;; *) die "команда не разрешена: ${a[0]:-}" ;; esac ;;
     on)     exec 9>/run/vampn.lock; flock -w 60 9; em_on ;;
     off)    exec 9>/run/vampn.lock; flock -w 60 9; em_off ;;
     status) em_status ;;
@@ -1131,10 +1132,40 @@ zebra() { # шаг «зебры» из check(): очередная попытк�
   return 1
 }
 
+# ---------- раскатка этого скрипта на VPN-сервер и на Бостон ----------
+# Скрипт на всех серверах должен быть одним и тем же. Сторож сам отправляет свой скрипт тем, у кого он другой:
+# на Бостон - по аварийному ключу, на активный VPN-сервер - по ключу users (оба с принудительной командой vampn remote,
+# команда selfupdate). Сервер ставит присланный скрипт только если он целый, старый остаётся как vampn.prev.
+DEPLOY_EVERY=600   # неудавшуюся отправку повторять не чаще раза в 10 минут
+deploy_scripts() { # [force] - отправить скрипт тем, у кого он другой; force - всем заново
+  local h t a out
+  h=$(sha256sum "$SELF" | cut -c1-16); t=$(now); a=$(get active_target 1)
+  if [[ ${1:-} == force ]]; then
+    put deployed_em none; put "deployed_srv_$a" none; put deploy_try_em 0; put deploy_try_srv 0
+  fi
+  if [[ -f $EM_ENV && $(get deployed_em none) != "$h" ]] && (( t - $(get deploy_try_em 0) >= DEPLOY_EVERY )); then
+    put deploy_try_em "$t"
+    if em_init && out=$(em_ssh selfupdate < "$SELF" 2>&1); then
+      put deployed_em "$h"; log "Бостон: скрипт обновлён ($out)"
+    else
+      log "Бостон: скрипт не обновлён: $(tail -c 150 <<<"${out:-}")"
+    fi
+  fi
+  if [[ $(get "deployed_srv_$a" none) != "$h" ]] && (( t - $(get deploy_try_srv 0) >= DEPLOY_EVERY )) && alive; then
+    put deploy_try_srv "$t"
+    if out=$("${SSH_SRV[@]}" -i /etc/vampn/users.key root@10.77.0.1 selfupdate < "$SELF" 2>&1); then
+      put "deployed_srv_$a" "$h"; log "VPN-сервер ($(tw_label)): скрипт обновлён ($out)"
+    else
+      log "VPN-сервер ($(tw_label)): скрипт не обновлён: $(tail -c 150 <<<"$out")"
+    fi
+  fi
+}
+
 check() {
   exec 9>"$STATE/lock"; flock -n 9 || exit 0
   local fails st cur t
   tw_use "$(get active_target 1)" || tw_use 1
+  deploy_scripts
   if em_active; then
     em_init
     ip link show "$EM_IFACE" >/dev/null 2>&1 || { log "туннель до Бостона пропал - поднимаю"; em_tunnel_up; }
@@ -1331,6 +1362,7 @@ home_main() {
   case $cmd in
     check)  check; mail_watch ;;
     status) status ;;
+    deploy) deploy_scripts force; echo "скрипт отправлен на Бостон и активный VPN-сервер (результат в журнале: vampn status)" ;;
     rotate) shift; rotate "$@" ;;
     reboot) do_reboot "${2:-}" ;;
     use)    [[ ${2:-} =~ ^[12]$ ]] || die "vampn use 1|2 (1 - основной сервер Timeweb, 2 - запасной)"
@@ -1370,6 +1402,22 @@ home_remote() {
 
 usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$SELF"; exit "${1:-0}"; }
 
+selfupdate_main() { # stdin: новый скрипт vampn от homeserv; ставится, только если он целый, старый остаётся как .prev
+  local dst=${VAMPN_INSTALL:-$SELF} tmp
+  tmp=$(mktemp "$(dirname "$dst")/.vampn-new.XXXXXX") || die "не могу создать временный файл"
+  head -c 3000000 > "$tmp"
+  if ! head -1 "$tmp" | grep -q '^#!/bin/bash' || ! grep -q '^SELF=/usr/local/sbin/vampn$' "$tmp"; then
+    rm -f "$tmp"; die "это не скрипт vampn, не ставлю"
+  fi
+  bash -n "$tmp" 2>/dev/null || { rm -f "$tmp"; die "в новом скрипте ошибка синтаксиса, не ставлю"; }
+  chmod 755 "$tmp"
+  "$tmp" help >/dev/null 2>&1 || { rm -f "$tmp"; die "новый скрипт не запускается, не ставлю"; }
+  [[ -f $dst ]] && cp -p "$dst" "$dst.prev"
+  mv -f "$tmp" "$dst"
+  logger -t vampn "скрипт обновлён с homeserv: $(sha256sum "$dst" | cut -c1-16)" 2>/dev/null || true
+  echo "ok $(sha256sum "$dst" | cut -c1-16)"
+}
+
 # ====================================================================================================
 # Общие команды (на любом сервере) и разбор
 # ====================================================================================================
@@ -1379,6 +1427,7 @@ case ${1:-} in
   mailtest) [[ -n ${2:-} ]] || die "vampn mailtest АДРЕС"; mailpy --test "$2"; exit ;;
   _mail) shift; mailpy "$@"; exit ;;
   _endpoint-change) data_init; endpoint_change "${2:?IP}"; exit ;;
+  selfupdate) selfupdate_main; exit ;;
   help|-h|--help) usage 0 ;;
   '') usage 1 ;;
 esac

@@ -70,6 +70,10 @@ ip_routed() { grep -qx "$1" "$T/routed"; }
 HS=0   # когда появится "новое рукопожатие" (0 = никогда)
 wait_new_handshake() { echo "wait-hs since=$1 secs=$2" >> "$CALLS"; (( HS )); }
 notify() { echo "NOTIFY $1" >> "$CALLS"; }
+# раскатка скрипта: настоящая функция сохраняется как real_deploy_scripts (её проверяет раздел 8),
+# а check() в остальных тестах не ходит ни на Бостон, ни на сервер
+eval "$(declare -f deploy_scripts | sed '1s/^deploy_scripts/real_deploy_scripts/')"
+deploy_scripts() { :; }
 
 echo "== 1. попытка: один новый IP, проходит, туннель поднялся"
 reset; printf '9.9.9.9\n' > "$T/ips"; printf 'A1\nA2\n' > "$T/cands"; HS=1; routed_list A1; rm -f "$T/ep"
@@ -544,6 +548,51 @@ ns['journal'](m, 'fail', 'SMTPServerDisconnected: boom')
 PYT
 T=$T ST=$STATE python3 -I "$T/pyj.py"
 ok "bash читает запись Python: zed в списке неушедших" "[[ \$(mail_failed | cut -f1) == zed ]]"
+
+echo "== 8. раскатка скрипта: Бостон и активный VPN-сервер"
+srv_ssh() { echo "srv_ssh $*" >> "$CALLS"; cat > /dev/null; return "${SRV_RC:-0}"; }
+em_ssh() { echo "em_ssh $*" >> "$CALLS"; cat > /dev/null; return "${EM_RC:-0}"; }
+alive() { return "${ALIVE_RC:-0}"; }
+SSH_SRV=(srv_ssh); SELF=$T/self.sh; echo 'EM_HOST=203.0.113.5' > "$EM_ENV"
+H() { sha256sum "$SELF" | cut -c1-16; }
+printf '#!/bin/bash\necho v1\n' > "$SELF"
+reset; ALIVE_RC=0; EM_RC=0; SRV_RC=0
+real_deploy_scripts
+ok "новый скрипт ушёл и на Бостон, и на сервер (по ключу users, команда selfupdate)" "grep -q 'em_ssh selfupdate' $CALLS && grep -q 'srv_ssh .*users.key root@10.77.0.1 selfupdate' $CALLS"
+ok "запомнено, что у обоих уже такой" "[[ \$(get deployed_em) == \$(H) && \$(get deployed_srv_1) == \$(H) ]]"
+: > "$CALLS"; real_deploy_scripts
+ok "тот же скрипт повторно не отправляется" "! grep -q 'em_ssh\|srv_ssh' $CALLS"
+real_deploy_scripts force
+ok "vampn deploy (force) отправляет заново обоим" "grep -q em_ssh $CALLS && grep -q srv_ssh $CALLS"
+printf '#!/bin/bash\necho v2\n' > "$SELF"; : > "$CALLS"; EM_RC=1; FAKE_NOW=1000100; put deploy_try_em 0; put deploy_try_srv 0
+real_deploy_scripts
+ok "скрипт изменился: сервер принял, Бостон нет - запись в журнале, метка не поставлена" "grep -q srv_ssh $CALLS && grep -q 'LOG Бостон: скрипт не обновлён' $CALLS && [[ \$(get deployed_em) != \$(H) && \$(get deployed_srv_1) == \$(H) ]]"
+: > "$CALLS"; FAKE_NOW=1000200; real_deploy_scripts
+ok "неудачную отправку на Бостон не повторяет раньше чем через 10 минут" "! grep -q em_ssh $CALLS"
+FAKE_NOW=1000800; EM_RC=0; real_deploy_scripts
+ok "через 10 минут повторяет, Бостон принимает" "grep -q em_ssh $CALLS && [[ \$(get deployed_em) == \$(H) ]]"
+printf '#!/bin/bash\necho v3\n' > "$SELF"; reset; ALIVE_RC=1; : > "$CALLS"; real_deploy_scripts
+ok "туннель мёртв: на VPN-сервер не отправляет, на Бостон отправляет" "! grep -q srv_ssh $CALLS && grep -q em_ssh $CALLS"
+reset; ALIVE_RC=0; put active_target 2; put deployed_srv_1 "$(H)"; real_deploy_scripts
+ok "активный сервер 2: его скрипт считается отдельно от основного" "grep -q srv_ssh $CALLS && [[ \$(get deployed_srv_2) == \$(H) ]]"
+reset; rm -f "$EM_ENV"; real_deploy_scripts
+ok "нет настроек аварийного сервера: Бостон пропускается" "! grep -q em_ssh $CALLS && grep -q srv_ssh $CALLS"
+reset; echo 'EM_HOST=203.0.113.5' > "$EM_ENV"; SRV_RC=1; real_deploy_scripts
+ok "сервер не принял: в журнале, метка не ставится" "grep -q 'LOG VPN-сервер (основной): скрипт не обновлён' $CALLS && [[ \$(get deployed_srv_1 none) == none ]]"
+
+echo "== 8б. selfupdate на сервере: ставит только целый скрипт"
+eval "$(sed -n '/^selfupdate_main()/,/^}/p' "$FILE")"
+mkdir -p "$T/inst"; export VAMPN_INSTALL=$T/inst/vampn
+printf '#!/bin/bash\necho old\n' > "$VAMPN_INSTALL"; chmod 755 "$VAMPN_INSTALL"
+good=$'#!/bin/bash\nSELF=/usr/local/sbin/vampn\nexit 0'
+out=$( (selfupdate_main <<<"$good") 2>&1 ); rc=$?
+ok "целый скрипт ставится" "[[ $rc == 0 && \$out == ok* && \$(cat $VAMPN_INSTALL) == \$good ]]"
+ok "старый остался как .prev, права исполняемые" "grep -q 'echo old' $VAMPN_INSTALL.prev && [[ -x $VAMPN_INSTALL ]]"
+for bad in $'echo без shebang\n' $'#!/bin/bash\necho чужой скрипт\n' $'#!/bin/bash\nSELF=/usr/local/sbin/vampn\nif then\n' $'#!/bin/bash\nSELF=/usr/local/sbin/vampn\nexit 1\n'; do
+  out=$( (selfupdate_main <<<"$bad") 2>&1 ); rc=$?
+  ok "негодный скрипт не ставится: $(head -c 28 <<<"$bad" | tr '\n' ' ')" "[[ $rc != 0 && \$(cat $VAMPN_INSTALL) == \$good && -z \$(ls -A $T/inst | grep '^\.vampn-new') ]]"
+done
+unset VAMPN_INSTALL
 
 echo; echo "итого: $pass прошло, $failn не прошло"
 rm -rf "$T"
