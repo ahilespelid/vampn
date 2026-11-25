@@ -15,7 +15,8 @@
 #   vampn keyconf ИМЯ      показать .conf ключа (из него приложение строит QR)
 #   vampn link ИМЯ         показать строку vpn:// пользователя
 #   vampn users            применить /etc/vampn/users.conf сейчас (сам применяется в течение минуты)
-#   vampn rotate [--force] сменить IP сервера сейчас (--force - без лимитов)
+#   vampn rotate [--force] [1|2] сменить IP сервера сейчас, на активном или на указанном (1 основной, 2 запасной); --force - без резерва и пауз по лимиту
+#   vampn use 1|2          сделать активным основной (1) или запасной (2) сервер Timeweb и направить туннель на него
 #   vampn reboot [hard]    перезагрузить VPN-сервер через API Timeweb
 #   vampn sync             подтянуть текущий IP из Timeweb в туннель
 #   vampn mirror           скопировать данные пользователей с VPN-сервера сейчас
@@ -761,10 +762,11 @@ TUN_CONF=/etc/amnezia/amneziawg/vampn.conf
 MIRROR=$STATE/mirror
 API=https://api.timeweb.cloud/api/v1
 HS_FRESH=45 PROBE_TRIES=3 PROBE_TIMEOUT=3 PROBE_HOST=10.77.0.1
-REBOOT_AT=2 ROTATE_AT=5 REBOOT_GAP=$((30*60)) ROTATE_GAP=$((60*60)) ROTATE_RETRY=180 ROTATE_TRIES=6 ROUTE_MIN_HOP=4
+REBOOT_AT=2 ROTATE_AT=5 REBOOT_GAP=$((30*60)) ROUTE_MIN_HOP=4
+ROTATE_RETRY=180 ROTATE_RETRY_SLOW=300 ATT_FAST=3 ATT_MAX=20   # попытки вернуть связь: первые 3 раз в 3 мин, дальше раз в 5 мин, всего на двух серверах не больше 20
 MAX_ROT_PER_DAY=4 MIRROR_EVERY=600
-IP_LIMIT=10 IP_RESERVE=2   # Timeweb даёт 10 новых IP в сутки (считается каждый кандидат, даже удалённый); 2 оставляем на ручную смену
-EM_AT=3 HS_WAIT=150 HS_WAIT_EXTRA=120 MAX_FAIL_ROT=3
+IP_LIMIT=10 IP_RESERVE=1   # Timeweb даёт 10 новых IP в сутки на аккаунт (считается каждый созданный, даже удалённый); 1 оставляем на ручную смену
+EM_AT=3 HS_WAIT=150 HS_WAIT_EXTRA=120
 SSH_SRV=(ssh -T -o LogLevel=ERROR -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10
          -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/vampn/mirror.known_hosts)
 
@@ -784,18 +786,19 @@ throttle() { # ключ секунд текст [mail] - одно и то же �
   put "thr_$key" "$t"; notify "$3" "${4:-}"
 }
 # --- лимит Timeweb на создание IP ---
+# Состояние лимита ведётся отдельно для каждого сервера Timeweb: к имени метки добавляется $TSUF ("" - основной, "_2" - запасной).
 until_active() { # имя метки со сроком: 0, пока срок не вышел; просроченную метку убирает вместе с «уже сообщал»
-  local u; u=$(get "$1")
+  local u; u=$(get "$1$TSUF")
   (( u > $(now) )) && return 0
-  [[ -e $STATE/$1 ]] && rm -f "$STATE/$1" "$STATE/thr_limit"
+  [[ -e $STATE/$1$TSUF ]] && rm -f "$STATE/$1$TSUF" "$STATE/thr_limit$TSUF"
   return 1
 }
 rot_blocked() { until_active rot_blocked_until; }   # срок назвал сам Timeweb: IP не создать, ждёт и ручная смена
 rot_paused() { until_active rot_paused_until; }     # наш резерв: автосмена ждёт, ручная --force проходит
-rot_wait_until() { local a b; a=$(get rot_blocked_until); b=$(get rot_paused_until); echo $(( a > b ? a : b )); }
-block_until() { # метка метка-времени текст: ставит паузу смены IP и один раз сообщает
-  put "$1" "$2"
-  throttle limit $((6*3600)) "$3 Автосмену IP поставил на паузу до $(TZ=Europe/Moscow date -d @"$2" '+%d.%m %H:%M') МСК, до тех пор об этом больше не пишу." mail
+rot_wait_until() { local a b; a=$(get "rot_blocked_until$TSUF"); b=$(get "rot_paused_until$TSUF"); echo $(( a > b ? a : b )); }
+block_until() { # имя-метки метка-времени текст: ставит паузу смены IP на этом сервере и один раз сообщает
+  put "$1$TSUF" "$2"
+  throttle "limit$TSUF" $((6*3600)) "[$(tw_label)] $3 Смену IP на этом сервере поставил на паузу до $(TZ=Europe/Moscow date -d @"$2" '+%d.%m %H:%M') МСК, до тех пор об этом больше не пишу." mail
 }
 tw_limit_block() { # $1 - ответ API на создание IP; 0, если это daily_limit_exceeded (срок берётся из ответа)
   local ts
@@ -804,19 +807,30 @@ tw_limit_block() { # $1 - ответ API на создание IP; 0, если �
   [[ $ts =~ ^[0-9]+$ ]] && (( ts > $(now) )) || ts=$(( $(now) + 3600 ))
   block_until rot_blocked_until "$ts" "Timeweb: лимит новых IP в сутки исчерпан ($IP_LIMIT)."
 }
-ip_created() { echo "$(now)" >> "$STATE/ip_creations"; tail -n 50 "$STATE/ip_creations" > "$STATE/ip_creations.n" && mv -f "$STATE/ip_creations.n" "$STATE/ip_creations"; }
-ip_used_24h() { awk -v d=$(( $(now) - 86400 )) '$1>d' "$STATE/ip_creations" 2>/dev/null | wc -l; }
-ip_budget_ok() { # свои же счётчики: автосмена не берёт последние IP_RESERVE создаваний суток
+ip_created() { echo "$(now)" >> "$STATE/ip_creations$TSUF"; tail -n 50 "$STATE/ip_creations$TSUF" > "$STATE/ip_creations$TSUF.n" && mv -f "$STATE/ip_creations$TSUF.n" "$STATE/ip_creations$TSUF"; }
+ip_used_24h() { awk -v d=$(( $(now) - 86400 )) '$1>d' "$STATE/ip_creations$TSUF" 2>/dev/null | wc -l; }
+ip_budget_ok() { # свои же счётчики: автосмена не берёт последние IP_RESERVE создавания суток
   local used; used=$(ip_used_24h)
   (( used < IP_LIMIT - IP_RESERVE )) && return 0
-  block_until rot_paused_until "$(awk -v d=$(( $(now) - 86400 )) '$1>d{print $1+86400+60; exit}' "$STATE/ip_creations")" \
+  block_until rot_paused_until "$(awk -v d=$(( $(now) - 86400 )) '$1>d{print $1+86400+60; exit}' "$STATE/ip_creations$TSUF")" \
     "За сутки уже создано $used новых IP из $IP_LIMIT (лимит Timeweb), $IP_RESERVE оставляю на ручную смену."
   return 1
 }
-tw_init() {
-  set -a; . /etc/vampn/timeweb.env; set +a
-  : "${TIMEWEB_TOKEN:?нет TIMEWEB_TOKEN в /etc/vampn/timeweb.env}" "${TIMEWEB_SERVER_ID:?нет TIMEWEB_SERVER_ID}"
+# Два сервера Timeweb: 1 - основной (/etc/vampn/timeweb.env), 2 - запасной (/etc/vampn/timeweb2.env, клон основного).
+TW_ENV1=/etc/vampn/timeweb.env TW_ENV2=/etc/vampn/timeweb2.env
+TARGET=1 TSUF=""
+tw_targets() { [[ -f $TW_ENV2 ]] && echo "1 2" || echo 1; }
+tw_label() { [[ ${TARGET:-1} == 1 ]] && echo "основной" || echo "запасной"; }
+tw_use() { # 1|2 - с какого сервера Timeweb работаем дальше; 1 если такого нет
+  local f=$TW_ENV1; [[ ${1:-1} == 2 ]] && f=$TW_ENV2
+  [[ -f $f ]] || { log "нет файла $f"; return 1; }
+  TIMEWEB_TOKEN="" TIMEWEB_SERVER_ID=""
+  set -a; . "$f"; set +a
+  : "${TIMEWEB_TOKEN:?нет TIMEWEB_TOKEN в $f}" "${TIMEWEB_SERVER_ID:?нет TIMEWEB_SERVER_ID в $f}"
+  TARGET=${1:-1}; TSUF=""; [[ $TARGET == 2 ]] && TSUF=_2
+  return 0
 }
+tw_init() { tw_use "$(get active_target 1)" || tw_use 1; }
 api() { curl -sS -m 30 -X "$1" -H "Authorization: Bearer $TIMEWEB_TOKEN" -H 'Content-Type: application/json' ${3:+-d "$3"} "$API$2"; }
 ips_json() { api GET "/servers/$TIMEWEB_SERVER_ID/ips"; }
 tw_status() { api GET "/servers/$TIMEWEB_SERVER_ID" | jq -r '.server.status // "unknown"'; }
@@ -988,68 +1002,65 @@ emergency_status() {
   echo "--- Бостон:"; em_ssh status 2>&1 | sed 's/^/  /'
 }
 
-rotate() { # [--force]
-  local t last day_cnt old new cand resp i t0 st ipsj
-  t=$(now); last=$(get last_rotation)
-  if rot_blocked || { [[ ${1:-} != --force ]] && rot_paused; }; then   # лимит на создание IP: не дёргаем API и молчим в Telegram, пока срок не выйдет
-    log "смена IP: новые IP создавать нельзя до $(date -d @"$(rot_wait_until)" '+%F %T') (лимит Timeweb) - жду"
-    [[ ${1:-} == --force ]] && echo "смена IP невозможна: Timeweb не даёт создавать новые IP до $(TZ=Europe/Moscow date -d @"$(rot_wait_until)" '+%d.%m %H:%M') МСК"
-    return 1
-  fi
-  day_cnt=$(awk -v d=$((t-86400)) '$1>d && NF==3' "$STATE/rotations" 2>/dev/null | wc -l)
-  if [[ ${1:-} != --force ]]; then
-    (( t - last < ROTATE_GAP )) && { log "смена IP: с прошлой прошло меньше часа - жду"; return 1; }
-    if (( day_cnt >= MAX_ROT_PER_DAY )); then
-      [[ $(get rot_limit_notified) != "$(date +%F)" ]] && { notify "лимит $MAX_ROT_PER_DAY смены IP в сутки исчерпан, а связи нет - нужна проверка вручную" mail; put rot_limit_notified "$(date +%F)"; }
-      return 1
-    fi
-    if (( $(get rot_fails) >= MAX_FAIL_ROT )); then
-      [[ -f $STATE/rot_fail_notified ]] || { notify "$MAX_FAIL_ROT смены IP подряд не помогли: туннель не поднимается и на новых адресах. Это не блокировка адреса - нужна проверка сервера вручную (консоль в панели Timeweb). Автосмену остановил" mail; touch "$STATE/rot_fail_notified"; }
-      return 1
-    fi
+# ---------- две площадки Timeweb («зебра») ----------
+# Основной сервер - /etc/vampn/timeweb.env, запасной (клон основного: те же ключи сервера и пользователей,
+# отличается IP) - /etc/vampn/timeweb2.env. Нет второго файла - всё как с одним сервером.
+# Попытка = ОДИН новый IP на одном сервере. Попытки идут по очереди: основной, запасной, основной...
+# Первые ATT_FAST попыток - раз в ROTATE_RETRY с, дальше реже (ROTATE_RETRY_SLOW), всего не больше ATT_MAX.
+# Аварийный канал (Бостон) включается отдельно, через EM_AT мин без связи, и на попытки не влияет.
+
+attempt() { # N [--force]: одна попытка вернуть связь через сервер N. 0 - туннель поднялся, 1 - не вышло (попытка потрачена), 2 - не начинал (ничего не потрачено)
+  local n=$1 force=${2:-} t old new cand resp t0 st ipsj tries
+  tw_use "$n" || return 2
+  t=$(now); tries=$(( $(get att_total) + 1 ))
+  if rot_blocked || { [[ $force != --force ]] && rot_paused; }; then   # лимит на создание IP: API не дёргаем, в Telegram молчим
+    log "[$(tw_label)] новые IP создавать нельзя до $(date -d @"$(rot_wait_until)" '+%F %T') (лимит Timeweb) - пропускаю"
+    [[ $force == --force ]] && echo "смена IP невозможна: Timeweb не даёт создавать новые IP до $(TZ=Europe/Moscow date -d @"$(rot_wait_until)" '+%d.%m %H:%M') МСК"
+    return 2
   fi
   st=$(tw_status)
   if [[ $st != on ]]; then
-    log "смена IP: статус сервера в Timeweb $st, а не on - жду"; echo "смена IP отложена: статус сервера в Timeweb $st, дождитесь on"
-    return 1
+    log "[$(tw_label)] статус сервера в Timeweb $st, а не on - пропускаю"; echo "смена IP отложена: статус сервера в Timeweb $st, дождитесь on"
+    if [[ $st == off || $st == stopped ]] && (( t - $(get "last_start$TSUF") >= REBOOT_GAP )); then
+      log "[$(tw_label)] включаю сервер (статус $st)"
+      api POST "/servers/$TIMEWEB_SERVER_ID/action" '{"action":"start"}' >/dev/null; put "last_start$TSUF" "$t"
+    fi
+    return 2
   fi
-  [[ ${1:-} == --force ]] || ip_budget_ok || return 1
+  [[ $force == --force ]] || ip_budget_ok || return 2
   ipsj=$(ips_json)
   if ! jq -e '.server_ips | type == "array"' >/dev/null 2>&1 <<<"$ipsj"; then
-    throttle ips_api 3600 "не получил список IP из API Timeweb: $(head -c 200 <<<"$ipsj")" mail; return 1
+    throttle "ips_api$TSUF" 3600 "[$(tw_label)] не получил список IP из API Timeweb: $(head -c 200 <<<"$ipsj")" mail; return 2
   fi
   old=$(jq -r '[.server_ips[]? | select(.type=="ipv4")] | (map(select(.is_main)) + .)[0].ip // empty' <<<"$ipsj")
   if [[ -z $old ]]; then   # список получен, но IPv4 у сервера нет вообще: нечего удалять, просто заводим новый
-    throttle noip $((6*3600)) "у сервера в Timeweb сейчас нет ни одного IPv4. Создаю новый (удалять нечего)." mail
+    throttle "noip$TSUF" $((6*3600)) "[$(tw_label)] у сервера в Timeweb сейчас нет ни одного IPv4. Создаю новый (удалять нечего)." mail
   fi
-  log "смена IP: старт, старый ${old:--}"
-  put last_rotation "$(( t - ROTATE_GAP + ROTATE_RETRY ))"   # если подобрать адрес не выйдет - повтор через ROTATE_RETRY с
-  new=""
-  for ((i=1; i<=ROTATE_TRIES; i++)); do
-    [[ ${1:-} == --force ]] || ip_budget_ok || return 1
-    resp=$(api POST "/servers/$TIMEWEB_SERVER_ID/ips" '{"type":"ipv4"}')
-    cand=$(jq -r '.server_ip.ip // empty' <<<"$resp" 2>/dev/null)
-    if [[ -z $cand ]]; then
-      tw_limit_block "$resp" || throttle ip_err 3600 "Timeweb не выдал новый IPv4: $(head -c 300 <<<"$resp")" mail
-      return 1
-    fi
-    ip_created
-    log "кандидат $i/$ROTATE_TRIES: $cand (за сутки создано $(ip_used_24h) из $IP_LIMIT)"
-    sleep 3
-    if ip_routed "$cand"; then new=$cand; break; fi
-    log "адрес $cand не проходит (трасса с homeserv обрывается) - убираю"
+  log "[$(tw_label)] попытка $tries из $ATT_MAX: старт, старый ${old:--}"
+  resp=$(api POST "/servers/$TIMEWEB_SERVER_ID/ips" '{"type":"ipv4"}')
+  cand=$(jq -r '.server_ip.ip // empty' <<<"$resp" 2>/dev/null)
+  if [[ -z $cand ]]; then
+    tw_limit_block "$resp" || throttle "ip_err$TSUF" 3600 "[$(tw_label)] Timeweb не выдал новый IPv4: $(head -c 300 <<<"$resp")" mail
+    return 2
+  fi
+  ip_created
+  log "[$(tw_label)] кандидат $cand (за сутки создано $(ip_used_24h) из $IP_LIMIT)"
+  sleep 3
+  if ! ip_routed "$cand"; then
+    log "[$(tw_label)] адрес $cand не проходит (трасса с homeserv обрывается) - убираю"
     api DELETE "/servers/$TIMEWEB_SERVER_ID/ips" "{\"ip\":\"$cand\"}" >/dev/null
-    sleep 4
-  done
-  [[ -z $new ]] && { throttle noroute 3600 "смена IP: за $ROTATE_TRIES попыток не нашёл адрес, до которого доходят пакеты. Остался прежний ${old:--}, повторю через $((ROTATE_RETRY/60)) мин (за сутки создано IP: $(ip_used_24h) из $IP_LIMIT)" mail; return 1; }
-  log "новый IPv4 $new: трасса проходит"
+    throttle att_fail 1800 "попытка $tries из $ATT_MAX ($(tw_label) сервер): новый адрес $cand не проходит с homeserv, убрал. Продолжаю по очереди на обоих серверах" mail
+    return 1
+  fi
+  new=$cand
+  log "[$(tw_label)] новый IPv4 $new: трасса проходит"
   if [[ -n $old ]]; then
     resp=$(api DELETE "/servers/$TIMEWEB_SERVER_ID/ips" "{\"ip\":\"$old\"}")
     sleep 5
     if all_ipv4 | grep -qx "$old"; then
-      notify "старый IP $old не удалился ($(head -c 200 <<<"$resp")), новый $new добавлен - проверьте панель Timeweb" mail
+      notify "[$(tw_label)] старый IP $old не удалился ($(head -c 200 <<<"$resp")), новый $new добавлен - проверьте панель Timeweb" mail
     else
-      log "старый IPv4 $old удалён"
+      log "[$(tw_label)] старый IPv4 $old удалён"
     fi
   fi
   sleep 20                       # даём Timeweb довести новый адрес до сервера
@@ -1060,25 +1071,68 @@ rotate() { # [--force]
   put fails 0
   # проверка каждые 5 с и выход сразу, как туннель поднялся; если сервер ещё грузится (статус не on) - один раз ждём дольше
   if wait_new_handshake "$t0" "$HS_WAIT" || { [[ $(tw_status) != on ]] && wait_new_handshake "$t0" "$HS_WAIT_EXTRA"; }; then
-    put last_rotation "$t"; echo "$t ${old:--} $new" >> "$STATE/rotations"
-    rm -f "$STATE/rot_fails" "$STATE/rot_fail_notified"
+    put active_target "$n"; put users_pushed none; put last_mirror 0   # на новом сервере список пользователей и копию данных обновим заново
+    echo "$t ${old:--} $new" >> "$STATE/rotations"
+    rm -f "$STATE/att_total" "$STATE/att_next" "$STATE/last_attempt" "$STATE/thr_att_fail" "$STATE/thr_att_max"
     mail_from_mirror "$new" && rm -f "$STATE/keys_pending"
-    notify "IP сменён: ${old:--} → $new, туннель поднялся (новое рукопожатие), ключи разосланы" mail
+    notify "туннель поднялся через $(tw_label) сервер: IP ${old:--} → $new (новое рукопожатие), ключи разосланы" mail
     rm -f "$STATE/down_since" "$STATE"/once_*
     return 0
   fi
   echo "$t ${old:--} $new fail" >> "$STATE/rotations"
-  put rot_fails "$(( $(get rot_fails) + 1 ))"
-  put last_rotation "$(( $(now) - ROTATE_GAP + ROTATE_RETRY ))"   # неудачная смена в лимит не идёт, повтор через ROTATE_RETRY с
-  notify "IP сменён: ${old:--} → $new, но туннель за $(( $(now) - t0 )) с не поднялся (неудача $(get rot_fails) из $MAX_FAIL_ROT) - ключи НЕ рассылал (разошлю, когда связь появится), делаю жёсткую перезагрузку" mail
+  throttle att_fail 1800 "попытка $tries из $ATT_MAX ($(tw_label) сервер): IP ${old:--} → $new, туннель за $(( $(now) - t0 )) с не поднялся - ключи НЕ рассылал (разошлю, когда связь появится). Продолжаю по очереди на обоих серверах" mail
   touch "$STATE/rotated_in_outage"
   do_reboot hard || true
+  return 1
+}
+
+rotate() { # [--force] [1|2]: ручная смена IP (на активном сервере или на указанном); --force - без резерва и пауз по лимиту
+  local a force="" n="" rc
+  for a in "$@"; do case $a in --force) force=--force ;; 1|2) n=$a ;; esac; done
+  n=${n:-$(get active_target 1)}
+  attempt "$n" $force; rc=$?
+  tw_use "$(get active_target 1)" || true
+  return $rc
+}
+
+zebra() { # шаг «зебры» из check(): очередная попытка на очередном сервере; 0 - связь вернулась
+  local t tries gap n pass rc=2 day_cnt other i cur
+  local -a tg
+  t=$(now); tries=$(get att_total)
+  if (( tries >= ATT_MAX )); then
+    throttle att_max $((24*3600)) "исчерпано $ATT_MAX попыток вернуть связь на обоих серверах Timeweb. Автоматика остановлена - нужна проверка вручную (консоль в панели Timeweb, аварийный канал работает)" mail
+    return 1
+  fi
+  gap=$ROTATE_RETRY; (( tries >= ATT_FAST )) && gap=$ROTATE_RETRY_SLOW
+  if (( t - $(get last_attempt) < gap )); then log "попытка вернуть связь: следующая через $(( gap - (t - $(get last_attempt)) )) с"; return 1; fi
+  day_cnt=$(awk -v d=$((t-86400)) '$1>d && NF==3' "$STATE/rotations" 2>/dev/null | wc -l)
+  if (( day_cnt >= MAX_ROT_PER_DAY )); then
+    throttle rot_day $((6*3600)) "уже $MAX_ROT_PER_DAY удачных смен IP за сутки, а связи нет - нужна проверка вручную" mail
+    return 1
+  fi
+  read -r -a tg <<<"$(tw_targets)"
+  n=$(get att_next "${tg[0]}"); [[ " ${tg[*]} " == *" $n "* ]] || n=${tg[0]}
+  for pass in "${tg[@]}"; do            # выбранный сервер пропустил (лимит/не on) - пробуем другой в ту же минуту
+    attempt "$n"; rc=$?
+    (( rc == 2 )) || break
+    for i in "${!tg[@]}"; do [[ ${tg[$i]} == "$n" ]] && { n=${tg[$(( (i + 1) % ${#tg[@]} ))]}; break; }; done
+  done
+  if (( rc == 0 )); then tw_use "$(get active_target 1)" || true; return 0; fi
+  if (( rc == 1 )); then               # попытка потрачена
+    put att_total "$(( tries + 1 ))"; put last_attempt "$t"
+    for i in "${!tg[@]}"; do [[ ${tg[$i]} == "$n" ]] && { other=${tg[$(( (i + 1) % ${#tg[@]} ))]}; break; }; done
+    put att_next "${other:-$n}"
+  fi
+  tw_use "$(get active_target 1)" || true
+  cur=$(main_ipv4)                     # неудачная попытка на другом сервере не должна оставлять туннель на его адресе
+  [[ -n $cur ]] && tun_set_endpoint "$cur"
   return 1
 }
 
 check() {
   exec 9>"$STATE/lock"; flock -n 9 || exit 0
   local fails st cur t
+  tw_use "$(get active_target 1)" || tw_use 1
   if em_active; then
     em_init
     ip link show "$EM_IFACE" >/dev/null 2>&1 || { log "туннель до Бостона пропал - поднимаю"; em_tunnel_up; }
@@ -1100,7 +1154,7 @@ check() {
       rm -f "$STATE/down_since" "$STATE"/once_* "$STATE/rotated_in_outage"
     fi
     put fails 0
-    rm -f "$STATE/rot_fails" "$STATE/rot_fail_notified"
+    rm -f "$STATE/att_total" "$STATE/att_next" "$STATE/last_attempt" "$STATE/thr_att_fail" "$STATE/thr_att_max"
     if [[ -s $STATE/keys_pending && -f $MIRROR/server.env ]]; then   # ключи ждали живого туннеля
       local pend; pend=$(get keys_pending)
       if [[ $pend == "$(tun_endpoint)" ]]; then mail_from_mirror "$pend" && rm -f "$STATE/keys_pending"; else rm -f "$STATE/keys_pending"; fi
@@ -1116,7 +1170,7 @@ check() {
   [[ -f $STATE/down_since ]] || put down_since "$(now)"
   log "туннель мёртв (рукопожатие $(hs_age) с назад), минут без связи: $fails"
   (( fails < REBOOT_AT )) && return 0
-  em_active || once em_offer "основной сервер (Timeweb) недоступен $fails мин. Пробую перезагрузить его, потом сменить IP. Через $EM_AT мин без связи аварийный канал (Бостон) включится сам"
+  em_active || once em_offer "основной сервер (Timeweb) недоступен $fails мин. Пробую перезагрузить его, потом сменить IP (по очереди на основном и запасном серверах). Через $EM_AT мин без связи аварийный канал (Бостон) включится сам"
   if (( fails >= EM_AT )) && ! em_active && [[ -f $EM_ENV && -f $MIRROR/server.env && ! -f $STATE/once_em_auto ]]; then
     touch "$STATE/once_em_auto"        # одна попытка на аварию (флаг снимается, когда связь вернулась)
     log "без связи $fails мин - включаю аварийный канал сам"
@@ -1126,15 +1180,15 @@ check() {
   case $st in
     on) ;;
     off|stopped)
-      if (( t - $(get last_start) >= REBOOT_GAP )); then
+      if (( t - $(get "last_start$TSUF") >= REBOOT_GAP )); then
         once start "сервер выключен (статус $st) - включаю"
         log "включаю сервер (статус $st)"
-        api POST "/servers/$TIMEWEB_SERVER_ID/action" '{"action":"start"}' >/dev/null; put last_start "$t"
-      fi
-      return 0 ;;
-    *) once status "сервер недоступен, статус в Timeweb: $st - жду"; return 0 ;;
+        api POST "/servers/$TIMEWEB_SERVER_ID/action" '{"action":"start"}' >/dev/null; put "last_start$TSUF" "$t"
+      fi ;;
+    *) once status "сервер недоступен, статус в Timeweb: $st - жду" ;;
   esac
-  if (( fails >= ROTATE_AT )) && rotate; then return 0; fi
+  if (( fails >= ROTATE_AT )) && zebra; then return 0; fi
+  [[ $st == on ]] || return 0          # перезагружаем только сервер, который Timeweb считает включённым
   if (( t - $(get last_reboot) >= REBOOT_GAP )); then
     # о перезагрузке уже предупредило сообщение em_offer выше - тут только журнал
     log "перезагрузка: без связи $fails мин"
@@ -1145,12 +1199,14 @@ check() {
 status() {
   echo "туннель      : рукопожатие $(hs_age) с назад ($(probe_tunnel 1 && echo 'сервер отвечает через туннель' || echo 'ответа через туннель нет'); мёртв, если рукопожатие > $HS_FRESH с и ответа нет)"
   echo "сервер       : $(tun_endpoint):$(tun_port)"
-  echo "Timeweb      : статус $(tw_status), IPv4 $(all_ipv4 | tr '\n' ' ')"
-  echo "без связи    : $(get fails) мин (перезагрузка с $REBOOT_AT, смена IP с $ROTATE_AT)"
+  local n act; act=$(get active_target 1)
+  for n in $(tw_targets); do   # подоболочка: tw_use меняет TARGET/TSUF и доступы только внутри неё
+    ( tw_use "$n" 2>/dev/null && echo "Timeweb ($(tw_label)$([[ $n == "$act" ]] && echo ', активный')): статус $(tw_status), IPv4 $(all_ipv4 | tr '\n' ' '), новых IP за сутки $(ip_used_24h) из $IP_LIMIT$({ rot_blocked || rot_paused; } && echo "; смена IP на паузе до $(TZ=Europe/Moscow date -d @"$(rot_wait_until)" '+%d.%m %H:%M') МСК")" )
+  done
+  echo "без связи    : $(get fails) мин (перезагрузка с $REBOOT_AT, смена IP с $ROTATE_AT), попыток вернуть связь $(get att_total) из $ATT_MAX"
   echo "аварийный    : $(em_active && echo "ВКЛЮЧЁН - трафик через Бостон" || echo "выключен")"
   local lm; lm=$(get last_mirror)
   echo "копия данных : $( ((lm)) && date -d @"$lm" '+%F %T' || echo нет), пользователей $(ls "$MIRROR"/clients/*.env 2>/dev/null | wc -l)"
-  echo "новые IP     : за сутки создано $(ip_used_24h) из $IP_LIMIT (лимит Timeweb)$({ rot_blocked || rot_paused; } && echo "; автосмена на паузе до $(TZ=Europe/Moscow date -d @"$(rot_wait_until)" '+%d.%m %H:%M') МСК")"
   echo "смены IP     :"; tail -5 "$STATE/rotations" 2>/dev/null | while read -r t o n; do echo "  $(date -d @"$t" '+%F %T') $o -> $n"; done
   echo "журнал       :"; tail -6 "$STATE/vampn.log" 2>/dev/null | sed 's/^/  /'
 }
@@ -1273,8 +1329,11 @@ home_main() {
   case $cmd in
     check)  check; mail_watch ;;
     status) status ;;
-    rotate) rotate "${2:-}" ;;
+    rotate) shift; rotate "$@" ;;
     reboot) do_reboot "${2:-}" ;;
+    use)    [[ ${2:-} =~ ^[12]$ ]] || die "vampn use 1|2 (1 - основной сервер Timeweb, 2 - запасной)"
+            tw_use "$2" || die "для сервера $2 нет файла доступа"; put active_target "$2"; put users_pushed none; put last_mirror 0
+            cur=$(main_ipv4); [[ -n $cur ]] && tun_set_endpoint "$cur"; echo "активный сервер: $(tw_label), туннель: $(tun_endpoint)" ;;
     sync)   cur=$(main_ipv4); [[ -n $cur ]] && tun_set_endpoint "$cur"; echo "сервер: $(tun_endpoint)" ;;
     mirror) pull_mirror && echo "ok: $(ls "$MIRROR"/clients/*.env | wc -l) пользователей" ;;
     users)  push_users force ;;
