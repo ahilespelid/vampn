@@ -8,6 +8,7 @@
 #   vampn status           состояние сторожа: туннель, Timeweb, смены IP, журнал
 #   vampn server           состояние самого VPN-сервера
 #   vampn list             пользователи VPN и их последнее подключение
+#   vampn peers            только чтение: по каждому ключу сервер, IP клиента, рукопожатие, принято и отправлено байт (для статистики в приложении)
 #   vampn reissue ИМЯ      перевыпустить ключ (старый перестаёт работать), новый уйдёт на почту
 #   vampn resend ИМЯ       отправить текущий ключ на почту ещё раз
 #   vampn resendall       отправить текущий ключ ВСЕМ из users.conf заново (с повтором неушедших и тревогой в Telegram)
@@ -534,6 +535,28 @@ users_list() {
   done
 }
 
+# Только чтение. По строке на ключ, поля через табуляцию: ИМЯ, IP клиента (или -), последнее рукопожатие (unix, 0 - не было),
+# принято от клиента и отправлено клиенту байт (счётчики awg, сбрасываются при перезапуске интерфейса).
+# Публичные ключи, ключи шифрования и конфиги не выводятся.
+users_peers() {
+  local f pk e h r t
+  declare -A ep hs rx tx
+  while IFS=$'\t' read -r pk e h r t; do
+    [[ -n $pk ]] || continue
+    ep[$pk]=$e; hs[$pk]=$h; rx[$pk]=$r; tx[$pk]=$t
+  done < <(awg show awg0 dump 2>/dev/null | awk -F'\t' 'NR>1 && NF>=7 {print $1 "\t" ($3 == "" ? "(none)" : $3) "\t" $5 "\t" $6 "\t" $7}')
+  for f in "$CL"/*.env; do [[ -f $f ]] || continue
+    ( source "$f"
+      e=${ep[$PUBKEY]:-}
+      if [[ $e == \[* ]]; then e=${e#\[}; e=${e%%\]*}; else e=${e%:*}; fi   # адрес без порта, IPv6 в скобках тоже
+      [[ -z $e || $e == '(none)' ]] && e=-
+      h=${hs[$PUBKEY]:-0}; [[ $h =~ ^[0-9]+$ ]] || h=0
+      r=${rx[$PUBKEY]:-0}; [[ $r =~ ^[0-9]+$ ]] || r=0
+      t=${tx[$PUBKEY]:-0}; [[ $t =~ ^[0-9]+$ ]] || t=0
+      printf '%s\t%s\t%s\t%s\t%s\n' "$NAME" "$e" "$h" "$r" "$t" )
+  done
+}
+
 endpoint_change() {  # IP - новый адрес во все конфиги и рассылка ключей
   local ip=$1 f
   [[ $ip =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "плохой IP $ip"
@@ -673,12 +696,13 @@ server_main() {
       srv_heal_network && srv_follow_ip ;;
     status) data_init; srv_status ;;
     list)   data_init; users_list ;;
+    peers)  data_init; users_peers ;;
     reissue|resend|link) data_init; srv_user_cmd "$@" ;;
     users-push) data_init; srv_users_push ;;
     remote)  # принудительная команда ключа homeserv: разрешён только этот список действий
       local a; read -r -a a <<<"${SSH_ORIGINAL_COMMAND:-users-push}"
       case ${a[0]:-} in
-        users-push|list|status|selfupdate) exec "$SELF" "${a[0]}" ;;
+        users-push|list|peers|status|selfupdate) exec "$SELF" "${a[0]}" ;;
         reissue|resend|link)    exec "$SELF" "${a[0]}" "${a[1]:-}" ;;
         *) die "команда не разрешена: ${a[0]:-}" ;;
       esac ;;
@@ -729,10 +753,11 @@ emergency_main() {
   case ${1:-} in
     remote)  # принудительная команда ключа homeserv
       local a; read -r -a a <<<"${SSH_ORIGINAL_COMMAND:-}"
-      case ${a[0]:-} in on|off|status|selfupdate) exec "$SELF" "${a[0]}" ;; *) die "команда не разрешена: ${a[0]:-}" ;; esac ;;
+      case ${a[0]:-} in on|off|peers|status|selfupdate) exec "$SELF" "${a[0]}" ;; *) die "команда не разрешена: ${a[0]:-}" ;; esac ;;
     on)     exec 9>/run/vampn.lock; flock -w 60 9; em_on ;;
     off)    exec 9>/run/vampn.lock; flock -w 60 9; em_off ;;
     status) em_status ;;
+    peers)  data_init; users_peers ;;   # только чтение; пусто, пока аварийный режим выключен (awg0 не поднят)
     check)  # таймер: после перезагрузки вернуть то состояние, которое было
       exec 9>/run/vampn.lock; flock -n 9 || exit 0
       if [[ -f $STATE/emergency_on ]]; then
@@ -1012,8 +1037,29 @@ emergency_status() {
 # Первые ATT_FAST попыток - раз в ROTATE_RETRY с, дальше реже (ROTATE_RETRY_SLOW), всего не больше ATT_MAX.
 # Аварийный канал (Бостон) включается отдельно, через EM_AT мин без связи, и на попытки не влияет.
 
+PROBE_IFACE=vampn-t
+probe_handshake() { # IP СЕК - отвечает ли VPN-сервер на этом адресе: временный интерфейс с тем же ключом, рабочий туннель не трогаем. 0 - рукопожатие есть
+  local ip=$1 secs=$2 conf=/etc/amnezia/amneziawg/$PROBE_IFACE.conf end h p ok=1
+  p=$(tun_port)
+  sed -E -e "s|^Endpoint *=.*|Endpoint = $ip:$p|" -e 's|^Address *=.*|Address = 10.77.0.3/32|' \
+         -e '/^(DNS|PostUp|PostDown|PreUp|PreDown|PersistentKeepalive|Table)/d' "$TUN_CONF" > "$conf"
+  # Table = off: маршрутов не добавляем, рабочий туннель не затрагивается; keepalive 1 с - рукопожатие стартует само, без трафика через маршруты
+  sed -i -e '/^\[Interface\]/a Table = off' -e '/^\[Peer\]/a PersistentKeepalive = 1' "$conf"; chmod 600 "$conf"
+  awg-quick down "$PROBE_IFACE" >/dev/null 2>&1 || true
+  if awg-quick up "$PROBE_IFACE" >/dev/null 2>&1; then
+    end=$(( $(now) + secs ))
+    while (( $(now) < end )); do
+      h=$(awg show "$PROBE_IFACE" latest-handshakes 2>/dev/null | awk '{print $2; exit}')
+      if (( ${h:-0} > 0 )); then ok=0; break; fi
+      sleep 4
+    done
+  fi
+  awg-quick down "$PROBE_IFACE" >/dev/null 2>&1 || true; rm -f "$conf"
+  return $ok
+}
+
 attempt() { # N [--force]: одна попытка вернуть связь через сервер N. 0 - туннель поднялся, 1 - не вышло (попытка потрачена), 2 - не начинал (ничего не потрачено)
-  local n=$1 force=${2:-} t old new cand resp t0 st ipsj tries
+  local n=$1 force=${2:-} t old new cand resp t0 st ipsj tries cur standby up
   tw_use "$n" || return 2
   t=$(now); tries=$(( $(get att_total) + 1 ))
   if rot_blocked || { [[ $force != --force ]] && rot_paused; }; then   # лимит на создание IP: API не дёргаем, в Telegram молчим
@@ -1068,12 +1114,24 @@ attempt() { # N [--force]: одна попытка вернуть связь ч�
   fi
   sleep 20                       # даём Timeweb довести новый адрес до сервера
   do_reboot || true
-  t0=$(now)
-  tun_set_endpoint "$new"
-  put keys_pending "$new"        # ключи уйдут только после нового рукопожатия
-  put fails 0
-  # проверка каждые 5 с и выход сразу, как туннель поднялся; если сервер ещё грузится (статус не on) - один раз ждём дольше
-  if wait_new_handshake "$t0" "$HS_WAIT" || { [[ $(tw_status) != on ]] && wait_new_handshake "$t0" "$HS_WAIT_EXTRA"; }; then
+  t0=$(now); up=0
+  standby=0; [[ $n != "$(get active_target 1)" ]] && standby=1
+  if (( standby )); then
+    # неактивный сервер: рабочий туннель идёт к другому серверу и живёт - сначала проверяем новый адрес на временном
+    # интерфейсе, а рабочий туннель переносим, только когда сервер уже ответил (если ещё грузится - один раз ждём дольше)
+    if probe_handshake "$new" "$HS_WAIT" || { [[ $(tw_status) != on ]] && probe_handshake "$new" "$HS_WAIT_EXTRA"; }; then
+      t0=$(now); tun_set_endpoint "$new"
+      put keys_pending "$new"; put fails 0
+      wait_new_handshake "$t0" "$HS_WAIT" && up=1      # сервер уже отвечал на проверке: здесь только перенос рабочего туннеля
+    fi
+  else
+    tun_set_endpoint "$new"
+    put keys_pending "$new"        # ключи уйдут только после нового рукопожатия
+    put fails 0
+    # проверка каждые 5 с и выход сразу, как туннель поднялся; если сервер ещё грузится (статус не on) - один раз ждём дольше
+    if wait_new_handshake "$t0" "$HS_WAIT" || { [[ $(tw_status) != on ]] && wait_new_handshake "$t0" "$HS_WAIT_EXTRA"; }; then up=1; fi
+  fi
+  if (( up )); then
     put active_target "$n"; put users_pushed none; put last_mirror 0   # на новом сервере список пользователей и копию данных обновим заново
     echo "$t ${old:--} $new" >> "$STATE/rotations"
     rm -f "$STATE/att_total" "$STATE/att_next" "$STATE/last_attempt" "$STATE/thr_att_fail" "$STATE/thr_att_max"
@@ -1083,6 +1141,16 @@ attempt() { # N [--force]: одна попытка вернуть связь ч�
     return 0
   fi
   echo "$t ${old:--} $new fail" >> "$STATE/rotations"
+  if (( standby )); then
+    throttle att_fail 1800 "попытка $tries из $ATT_MAX ($(tw_label) сервер): IP ${old:--} → $new, сервер не ответил на проверке. Рабочий туннель не трогал, ключи НЕ рассылал. Продолжаю по очереди на обоих серверах" mail
+    do_reboot hard || true
+    if [[ $(get keys_pending none) == "$new" ]]; then   # проверка прошла, а перенос рабочего туннеля нет - вернуть туннель на активный сервер
+      rm -f "$STATE/keys_pending"
+      tw_use "$(get active_target 1)" || true
+      cur=$(main_ipv4); [[ -n $cur ]] && tun_set_endpoint "$cur"
+    fi
+    return 1
+  fi
   throttle att_fail 1800 "попытка $tries из $ATT_MAX ($(tw_label) сервер): IP ${old:--} → $new, туннель за $(( $(now) - t0 )) с не поднялся - ключи НЕ рассылал (разошлю, когда связь появится). Продолжаю по очереди на обоих серверах" mail
   touch "$STATE/rotated_in_outage"
   do_reboot hard || true
@@ -1362,6 +1430,7 @@ home_main() {
   case $cmd in
     check)  check; mail_watch ;;
     status) status ;;
+    peers)  home_peers ;;
     deploy) deploy_scripts force; echo "скрипт отправлен на Бостон и активный VPN-сервер (результат в журнале: vampn status)" ;;
     rotate) shift; rotate "$@" ;;
     reboot) do_reboot "${2:-}" ;;
@@ -1383,6 +1452,21 @@ home_main() {
       home_remote "$@" ;;
     *) echo "vampn: неизвестная команда «$cmd»" >&2; usage 1 ;;
   esac
+}
+
+# Только чтение, для статистики в приложении. Строка на ключ, поля через табуляцию:
+# СЕРВЕР (основной|запасной|аварийный), IP сервера, ИМЯ, IP клиента (или -), рукопожатие (unix, 0 - не было), принято, отправлено (байт).
+# В аварийном режиме спрашивает аварийный сервер, иначе активный VPN-сервер.
+home_peers() {
+  local label ip out
+  if em_active; then
+    em_init; label=аварийный; ip=$EM_HOST
+    out=$(em_ssh peers </dev/null) || die "аварийный сервер не ответил"
+  else
+    label=$(tw_label); ip=$(tun_endpoint)
+    out=$(remote peers) || die "VPN-сервер не ответил"
+  fi
+  awk -F'\t' -v OFS='\t' -v l="$label" -v s="${ip:--}" 'NF==5 {print l, s, $1, $2, $3, $4, $5}' <<<"$out"
 }
 
 home_remote() {

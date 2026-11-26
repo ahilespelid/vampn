@@ -33,12 +33,13 @@ TIMEWEB_SERVER_ID=1
 tw_targets() { echo "${TARGETS:-1}"; }
 tw_use() { TARGET=${1:-1}; TSUF=""; [[ $TARGET == 2 ]] && TSUF=_2; TIMEWEB_SERVER_ID=$TARGET; return 0; }
 reset() { : > "$CALLS"; rm -rf "$STATE" "$T/twn"; rm -f "$T"/ips "$T"/ips_2 "$T"/cands "$T"/cands_2 "$T"/next "$T"/next_2; mkdir -p "$STATE/mirror"; touch "$STATE/mirror/server.env"
-  FAKE_NOW=1000000; TW_NOW=on; TW_NOW2=on; TW_LATE=on; TARGETS=1; TARGET=1; TSUF=""; LIMIT_JSON=""; IPS_BROKEN=""; }
+  FAKE_NOW=1000000; TW_NOW=on; TW_NOW2=on; TW_LATE=on; TARGETS=1; TARGET=1; TSUF=""; LIMIT_JSON=""; IPS_BROKEN=""; unset PHS; echo 9.9.9.9 > "$T/ep"; }
 log() { echo "LOG $*" >> "$CALLS"; }
 do_reboot() { echo "reboot ${1:-soft}" >> "$CALLS"; return 0; }
 all_ipv4() { cat "$T/ips$TSUF" 2>/dev/null; }
 main_ipv4() { head -1 "$T/ips$TSUF" 2>/dev/null; }
-tun_set_endpoint() { echo "endpoint $1" >> "$CALLS"; echo "$1" > "$T/ep"; }
+tun_set_endpoint() { [[ $(cat "$T/ep" 2>/dev/null) == "$1" ]] && return 0   # как настоящая: тот же адрес - ничего не делает
+  echo "endpoint $1" >> "$CALLS"; echo "$1" > "$T/ep"; }
 tun_endpoint() { cat "$T/ep" 2>/dev/null || echo 1.1.1.1; }
 mail_from_mirror() { echo "keys-mail $1" >> "$CALLS"; return "${MAIL_RC:-0}"; }
 pull_mirror() { :; }
@@ -69,6 +70,8 @@ routed_list() { printf '%s\n' "$@" > "$T/routed"; }
 ip_routed() { grep -qx "$1" "$T/routed"; }
 HS=0   # когда появится "новое рукопожатие" (0 = никогда)
 wait_new_handshake() { echo "wait-hs since=$1 secs=$2" >> "$CALLS"; (( HS )); }
+# проверка нового адреса неактивного сервера на временном интерфейсе: по умолчанию отвечает как HS, PHS задаёт отдельно
+probe_handshake() { echo "probe $1 $2" >> "$CALLS"; (( ${PHS:-$HS} )); }
 notify() { echo "NOTIFY $1" >> "$CALLS"; }
 # раскатка скрипта: настоящая функция сохраняется как real_deploy_scripts (её проверяет раздел 8),
 # а check() в остальных тестах не ходит ни на Бостон, ни на сервер
@@ -198,6 +201,7 @@ ok "zebra вернула 0" "[[ $rc == 0 ]]"
 ok "создан Y1 на запасном, на основном ничего не создавалось" "grep -q 'POST-ip Y1' $CALLS && ! grep -q 'POST-ip X' $CALLS"
 ok "активный сервер = 2, пользователи и копия данных обновятся" "[[ \$(get active_target) == 2 && \$(get users_pushed) == none ]]"
 ok "ключи с адресом Y1, туннель на Y1" "grep -q 'keys-mail Y1' $CALLS && [[ \$(cat $T/ep) == Y1 ]]"
+ok "сначала проверка на временном интерфейсе (150 с), только потом перенос рабочего туннеля" "grep -q 'probe Y1 150' $CALLS && [[ \$(grep -n '^probe' $CALLS | cut -d: -f1 | head -1) -lt \$(grep -n '^endpoint' $CALLS | cut -d: -f1 | head -1) ]]"
 ok "счётчики попыток сброшены" "[[ ! -e $STATE/att_total && ! -e $STATE/att_next && ! -e $STATE/last_attempt ]]"
 ok "сообщение называет запасной сервер" "grep -q 'NOTIFY туннель поднялся через запасной сервер: IP 8.8.8.8 → Y1' $CALLS"
 
@@ -207,8 +211,28 @@ printf 'X1\n' > "$T/cands"; printf 'Y1\n' > "$T/cands_2"; HS=0; routed_list Y1; 
 zebra >/dev/null 2>&1; rc=$?
 ok "zebra вернула 1, попытка потрачена" "[[ $rc == 1 && \$(get att_total) == 1 ]]"
 ok "активным остался основной" "[[ \$(get active_target 1) == 1 ]]"
-ok "туннель возвращён на адрес основного сервера" "[[ \$(cat $T/ep) == 9.9.9.9 ]]"
+ok "рабочий туннель вообще не трогали (ни переноса адреса, ни ожидания рукопожатия)" "! grep -q '^endpoint' $CALLS && ! grep -q 'wait-hs' $CALLS && [[ \$(cat $T/ep) == 9.9.9.9 ]]"
+ok "отложенной рассылки нет, флага аварии нет" "[[ ! -e $STATE/keys_pending && ! -e $STATE/rotated_in_outage ]]"
 ok "следующая попытка снова на основном" "[[ \$(get att_next) == 1 ]]"
+ok "сообщение: сервер не ответил на проверке, рабочий туннель не трогал" "grep -q 'NOTIFY попытка 1 из 20 (запасной сервер).*Рабочий туннель не трогал' $CALLS"
+
+echo "== Z3б. зебра: проверка прошла, а перенос рабочего туннеля нет - туннель возвращается"
+reset; TARGETS="1 2"; printf '9.9.9.9\n' > "$T/ips"; printf '8.8.8.8\n' > "$T/ips_2"
+printf 'X1\n' > "$T/cands"; printf 'Y1\n' > "$T/cands_2"; HS=0; PHS=1; routed_list Y1; put active_target 1; put att_next 2
+zebra >/dev/null 2>&1; rc=$?
+ok "zebra вернула 1, активным остался основной" "[[ $rc == 1 && \$(get active_target 1) == 1 ]]"
+ok "туннель вернули на основной сервер, рассылки нет" "[[ \$(cat $T/ep) == 9.9.9.9 ]] && grep -q 'endpoint Y1' $CALLS && ! grep -q keys-mail $CALLS && [[ ! -e $STATE/keys_pending ]]"
+
+echo "== Z3в. зебра: сервер ещё грузится - проверка ждёт второй раз 120 с"
+reset; TARGETS="1 2"; printf '9.9.9.9\n' > "$T/ips"; printf '8.8.8.8\n' > "$T/ips_2"
+printf 'X1\n' > "$T/cands"; printf 'Y1\n' > "$T/cands_2"; HS=0; routed_list Y1; put active_target 1; put att_next 2; TW_LATE=rebooting
+zebra >/dev/null 2>&1
+ok "две проверки: 150 и 120 с, рабочий туннель цел" "[[ \$(grep -c '^probe' $CALLS) == 2 ]] && grep -q 'probe Y1 120' $CALLS && ! grep -q '^endpoint' $CALLS"
+
+echo "== Z3г. активный сервер ведёт себя как раньше (без проверки на временном интерфейсе)"
+reset; TARGETS="1 2"; printf '9.9.9.9\n' > "$T/ips"; printf 'X1\n' > "$T/cands"; HS=0; routed_list X1; put active_target 1; put att_next 1
+zebra >/dev/null 2>&1
+ok "рабочий туннель переносится сразу, проверки нет, флаг аварии стоит" "grep -q 'endpoint X1' $CALLS && ! grep -q '^probe' $CALLS && [[ -e $STATE/rotated_in_outage ]]"
 
 echo "== Z4. зебра: у выбранного сервера лимит - в ту же минуту идём на другой, попытка не тратится зря"
 reset; TARGETS="1 2"; printf '9.9.9.9\n' > "$T/ips"; printf '8.8.8.8\n' > "$T/ips_2"
