@@ -618,6 +618,114 @@ for bad in $'echo без shebang\n' $'#!/bin/bash\necho чужой скрипт\
 done
 unset VAMPN_INSTALL
 
+echo "== 11. самолечение VPN-сервера: сеть, службы, закрепление адреса"
+eval "$(sed -n '/^SRV_AWG_CONF=/,/^srv_status()/p' "$FILE" | sed '$d')"   # константы и srv_heal_*, без srv_status
+eval "$(sed -n '/^srv_inet_ok()/p;/^srv_dhcp_ip()/p' "$FILE")"
+srv_log() { echo "SLOG $*" >> "$CALLS"; }
+SRV_AWG_CONF=$T/awg0.conf; printf '[Interface]\nListenPort = 49029\n' > "$SRV_AWG_CONF"
+PIN_FILE=$T/60-pin.yaml; NOPIN_FILE=$T/no-pin
+# среда сервера: IFADDRS - адреса eth0 (DHCP-адрес первый), остальное - флаги
+ip() { case "$*" in
+    "link show eth0") [[ ${ETH_UP:-1} == 1 ]] && echo "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500" || echo "2: eth0: <BROADCAST,MULTICAST> mtu 1500 state DOWN" ;;
+    "link show awg0") [[ ${AWG:-up} == missing ]] && return 1; [[ ${AWG:-up} == up ]] && echo "5: awg0: <POINTOPOINT,NOARP,UP,LOWER_UP>" || echo "5: awg0: <POINTOPOINT,NOARP> state DOWN" ;;
+    "-4 -o addr show dev eth0 scope global dynamic") head -1 "$T/ifaddrs" 2>/dev/null | awk '{print "2: eth0 inet " $1 "/24 scope global dynamic"}' ;;
+    "-4 -o addr show dev eth0 scope global") awk '{print "2: eth0 inet " $1 "/24 scope global"}' "$T/ifaddrs" 2>/dev/null ;;
+    "-4 route show default") [[ ${ROUTE:-1} == 1 ]] && echo "default via 129.101.120.1 dev eth0" ;;
+    "link set eth0 up") echo "ip link-up eth0" >> "$CALLS" ;;
+    *) echo "ip? $*" >> "$CALLS" ;;
+  esac; }
+curl() { case "$*" in
+    *"-o /dev/null"*) return "${INET_RC:-0}" ;;
+    *) [[ -n ${PUB:-} ]] && echo "$PUB" || return 22 ;;
+  esac; }
+systemctl() { echo "systemctl $*" >> "$CALLS"
+  case "$*" in
+    "is-active --quiet systemd-networkd") return "${NETD_RC:-0}" ;;
+    "is-enabled --quiet ssh") return 0 ;;
+    "is-active --quiet ssh") return "${SSH_RC:-0}" ;;
+  esac; return 0; }
+networkctl() { echo "networkctl $*" >> "$CALLS"; }
+ss() { [[ ${LISTEN:-1} == 1 ]] && echo "UNCONN 0 0 0.0.0.0:49029 0.0.0.0:*"; }
+nft() { case "$*" in
+    "list table inet filter") return "${NFT_RC:-0}" ;;
+    "list chain inet filter input") [[ ${NFT_RULE:-1} == 1 ]] && echo "udp dport 49029 accept" ;;
+  esac; return 0; }
+sysctl() { case "$*" in "-n net.ipv4.ip_forward") echo "${FWD:-1}" ;; *) echo "sysctl $*" >> "$CALLS" ;; esac; }
+netplan() { echo "netplan $*" >> "$CALLS"
+  [[ $1 == apply ]] && { [[ ${NETPLAN_RC:-0} != 0 ]] && return 1; [[ -f $PIN_FILE ]] && { p=$(grep -Eo '[0-9]{1,3}(\.[0-9]{1,3}){3}' "$PIN_FILE"); grep -qx "$p" "$T/ifaddrs" || echo "$p" >> "$T/ifaddrs"; }
+    [[ ! -f $PIN_FILE ]] && sed -i '2,$d' "$T/ifaddrs"; }   # убрали закрепку - остаётся только DHCP-адрес
+  [[ $1 == generate ]] && return "${NETPLAN_GEN_RC:-0}"; return 0; }
+env11() { reset; rm -f "$PIN_FILE" "$NOPIN_FILE"; echo 129.101.120.50 > "$T/ifaddrs"
+  unset ETH_UP AWG ROUTE INET_RC PUB NETD_RC SSH_RC LISTEN NFT_RC NFT_RULE FWD NETPLAN_RC NETPLAN_GEN_RC; }
+
+env11; srv_heal_services; srv_heal_network
+ok "всё в порядке: ни одного действия, ни одной записи в журнал" "! grep -qE 'SLOG|restart|systemctl start|reconfigure|sysctl|netplan|link-up' $CALLS"
+
+env11; AWG=down; srv_heal_services
+ok "awg0 есть, но не UP: перезапускается" "grep -q 'systemctl restart awg-quick@awg0' $CALLS && grep -q 'SLOG awg0 не поднят' $CALLS"
+: > "$CALLS"; srv_heal_services
+ok "через минуту повторно не перезапускает (защита 5 минут)" "! grep -q 'restart' $CALLS"
+FAKE_NOW=$((FAKE_NOW+301)); srv_heal_services
+ok "через 5 минут - снова" "grep -q 'systemctl restart awg-quick@awg0' $CALLS"
+
+env11; AWG=missing; srv_heal_services
+ok "awg0 нет вовсе: поднимается" "grep -q 'SLOG awg0 нет' $CALLS && grep -q 'restart awg-quick@awg0' $CALLS"
+env11; LISTEN=0; srv_heal_services
+ok "порт VPN не слушается: awg0 перезапускается" "grep -q 'SLOG порт 49029 не слушается' $CALLS && grep -q 'restart awg-quick@awg0' $CALLS"
+env11; NFT_RULE=0; srv_heal_services
+ok "в фильтре нет правила для порта: nftables перезагружается" "grep -q 'в фильтре нет правила' $CALLS && grep -q 'systemctl restart nftables' $CALLS"
+env11; NFT_RC=1; srv_heal_services
+ok "nftables не загружен: загружается" "grep -q 'SLOG nftables не загружен' $CALLS && grep -q 'systemctl restart nftables' $CALLS"
+env11; FWD=0; srv_heal_services
+ok "ip_forward выключен: включается" "grep -q 'sysctl -qw net.ipv4.ip_forward=1' $CALLS"
+env11; SSH_RC=3; srv_heal_services
+ok "sshd лёг: запускается" "grep -q 'systemctl start ssh' $CALLS"
+
+env11; ETH_UP=0; srv_heal_network
+ok "eth0 лёг: поднимается" "grep -q 'ip link-up eth0' $CALLS"
+env11; NETD_RC=3; srv_heal_network
+ok "networkd не запущен: запускается" "grep -q 'systemctl start systemd-networkd' $CALLS"
+env11; : > "$T/ifaddrs"; srv_heal_network
+ok "нет IPv4 на eth0: переподключение сразу, не через 3 минуты" "grep -q 'networkctl reconfigure eth0' $CALLS && grep -q 'на eth0 нет IPv4' $CALLS"
+: > "$CALLS"; srv_heal_network
+ok "через минуту переподключение не повторяется (защита 2 минуты)" "! grep -q 'на eth0 нет IPv4' $CALLS"
+env11; ROUTE=0; srv_heal_network
+ok "нет маршрута по умолчанию: переподключение" "grep -q 'networkctl reconfigure eth0' $CALLS"
+env11; INET_RC=1; srv_heal_network; srv_heal_network
+ok "интернета нет 2 минуты: пока только счёт" "[[ \$(get net_fails) == 2 ]] && ! grep -q 'networkctl' $CALLS"
+srv_heal_network
+ok "3-я минута без интернета: переподключение eth0 (как раньше)" "grep -q 'SLOG переподключаю eth0' $CALLS"
+
+echo "-- закрепление адреса, который Timeweb не отдал по DHCP"
+env11; PUB=82.97.246.204; srv_heal_ip; srv_heal_ip
+ok "две проверки подряд: ничего не меняет" "[[ ! -e $PIN_FILE ]] && ! grep -q netplan $CALLS"
+srv_heal_ip
+ok "третья: адрес закреплён, netplan применён, адрес появился на eth0" "grep -q 'netplan apply' $CALLS && grep -q 'адрес 82.97.246.204 закреплён' $CALLS && [[ \$(srv_pinned_ip) == 82.97.246.204 ]] && srv_ifaces_ipv4 | grep -qx 82.97.246.204"
+ok "эффективный адрес для ключей - закреплённый, не устаревший DHCP" "[[ \$(srv_effective_ip) == 82.97.246.204 && \$(srv_dhcp_ip) == 129.101.120.50 ]]"
+: > "$CALLS"; srv_heal_ip
+ok "дальше тихо: адрес на интерфейсе, повторных действий нет" "! grep -q 'netplan' $CALLS && ! grep -q SLOG $CALLS"
+PUB=129.101.120.50; srv_heal_ip
+ok "снаружи видны по DHCP-адресу, закрепка другая - устарела, снимается" "[[ ! -e $PIN_FILE ]] && grep -q 'устарел' $CALLS && [[ \$(srv_effective_ip) == 129.101.120.50 ]]"
+
+env11; PUB=129.101.120.50; srv_heal_ip; srv_heal_ip; srv_heal_ip
+ok "снаружи виден адрес с eth0: ничего не делает" "[[ ! -e $PIN_FILE ]] && ! grep -q netplan $CALLS"
+env11; PUB=10.0.0.5; for i in 1 2 3 4; do srv_heal_ip; done
+ok "частный/серый адрес снаружи не закрепляется" "[[ ! -e $PIN_FILE ]]"
+env11; PUB=100.64.1.1; for i in 1 2 3 4; do srv_heal_ip; done
+ok "адрес CGNAT 100.64.x не закрепляется" "[[ ! -e $PIN_FILE ]]"
+env11; unset PUB; for i in 1 2 3 4; do srv_heal_ip; done
+ok "внешние сервисы не ответили: ничего не делает" "[[ ! -e $PIN_FILE ]] && ! grep -q netplan $CALLS"
+env11; PUB=82.97.246.204; touch "$NOPIN_FILE"; for i in 1 2 3 4; do srv_heal_ip; done
+ok "файл no-pin запрещает закрепление" "[[ ! -e $PIN_FILE ]]"
+env11; PUB=82.97.246.204; srv_heal_ip; PUB=82.97.246.205; srv_heal_ip; srv_heal_ip; PUB=82.97.246.204; srv_heal_ip
+ok "адрес снаружи прыгает: счёт подряд идущих проверок сбрасывается, закрепки нет" "[[ ! -e $PIN_FILE ]]"
+env11; PUB=82.97.246.204; NETPLAN_RC=1; srv_heal_ip; srv_heal_ip; srv_heal_ip
+ok "netplan не применился: закрепка не остаётся, в журнале причина" "[[ ! -e $PIN_FILE ]] && grep -q 'закрепить адрес 82.97.246.204 не вышло' $CALLS"
+env11; PUB=82.97.246.204; srv_heal_ip; srv_heal_ip; srv_heal_ip; PUB=82.97.246.100; srv_heal_ip; srv_heal_ip; srv_heal_ip
+ok "после закрепки не чаще раза в полчаса" "[[ \$(srv_pinned_ip) == 82.97.246.204 ]]"
+FAKE_NOW=$((FAKE_NOW+1801)); srv_heal_ip; srv_heal_ip; srv_heal_ip
+ok "через полчаса, если адрес снаружи снова не на интерфейсе, закрепка заменяется" "[[ \$(srv_pinned_ip) == 82.97.246.100 ]]"
+
 echo; echo "итого: $pass прошло, $failn не прошло"
 rm -rf "$T"
 [[ $failn == 0 ]]

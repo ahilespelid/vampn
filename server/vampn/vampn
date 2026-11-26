@@ -606,22 +606,90 @@ sync_users() {  # привести пользователей к /etc/vampn/user
 
 # ====================================================================================================
 # VPN-сервер: самопроверка раз в минуту
-#  - nftables не загружен -> загружает;  awg0 упал -> поднимает
+#  - nftables не загружен -> загружает;  awg0 упал, не поднят или не слушает порт VPN -> перезапускает;
+#    в фильтре нет правила для порта VPN -> перезагружает nftables;  ip_forward выключен -> включает;  sshd лёг -> запускает
+#  - eth0 лёг / нет IPv4 / нет маршрута по умолчанию / networkd не запущен -> поднимает и переподключает сразу
 #  - нет интернета: 3 мин -> переподключение eth0, 6 мин -> перезапуск systemd-networkd,
 #    10 мин -> перезагрузка (не чаще раза в час, не больше 4 в сутки)
+#  - снаружи сервер виден по адресу, которого нет на eth0 (Timeweb не обновил DHCP) -> после трёх проверок подряд
+#    адрес закрепляется в /etc/netplan/60-vampn-ip.yaml (запретить: файл /etc/vampn/no-pin); устаревшая закрепка снимается сама
 #  - публичный IPv4 сменился -> новые конфиги и рассылка (письма уходят через homeserv, дубли он отсекает)
 # ====================================================================================================
 srv_log() { logger -t vampn "$*"; echo "$(date '+%F %T') $*" >> "$STATE/vampn.log"; }
 srv_inet_ok() { curl -4 -s -o /dev/null -m 8 https://1.1.1.1 || curl -4 -s -o /dev/null -m 8 https://api.timeweb.cloud; }
 srv_dhcp_ip() { ip -4 -o addr show dev eth0 scope global dynamic | awk '{split($4,a,"/"); print a[1]; exit}'; }
 
+SRV_AWG_CONF=/etc/amnezia/amneziawg/awg0.conf
+PIN_FILE=/etc/netplan/60-vampn-ip.yaml   # закреплённый адрес, если Timeweb по DHCP отдаёт не тот
+NOPIN_FILE=/etc/vampn/no-pin             # есть такой файл - сервер сам адрес не закрепляет
+srv_guard() { # ключ секунд - 0, если с прошлого раза прошло достаточно (не даёт лечению крутиться каждую минуту)
+  local t; t=$(now); (( t - $(get "guard_$1" 0) >= $2 )) || return 1; put "guard_$1" "$t"
+}
+srv_port() { awk -F' *= *' '/^ListenPort/{print $2; exit}' "$SRV_AWG_CONF" 2>/dev/null; }
+srv_ifaces_ipv4() { ip -4 -o addr show dev eth0 scope global 2>/dev/null | awk '{split($4,a,"/"); print a[1]}'; }
+srv_pinned_ip() { [[ -f $PIN_FILE ]] && grep -Eo '[0-9]{1,3}(\.[0-9]{1,3}){3}' "$PIN_FILE" | head -1; }
+srv_public_ip() { # адрес, под которым сервер виден снаружи (по трём сервисам, первый ответивший)
+  local u ip
+  for u in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
+    ip=$(curl -4 -s -m 6 "$u" 2>/dev/null | tr -d '[:space:]')
+    [[ $ip =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && { echo "$ip"; return 0; }
+  done
+  return 1
+}
+srv_private_ip() { [[ $1 =~ ^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.) ]]; }
+srv_effective_ip() { # адрес сервера для ключей: закреплённый (если он на интерфейсе), иначе от DHCP
+  local p; p=$(srv_pinned_ip)
+  if [[ -n $p ]] && srv_ifaces_ipv4 | grep -qx "$p"; then echo "$p"; else srv_dhcp_ip; fi
+}
+srv_netplan_apply() { netplan generate >/dev/null 2>&1 && netplan apply >/dev/null 2>&1; }
+
 srv_heal_services() {
+  local port
   nft list table inet filter >/dev/null 2>&1 || { srv_log "nftables не загружен - загружаю"; systemctl restart nftables; }
   ip link show awg0 >/dev/null 2>&1 || { srv_log "awg0 нет - поднимаю"; systemctl restart awg-quick@awg0; }
+  port=$(srv_port)
+  if ip link show awg0 >/dev/null 2>&1 && [[ -n $port ]] && srv_guard svc 300; then
+    # интерфейс есть, но лежит, не слушает порт VPN или порт закрыт фильтром - обычные «тихие» поломки
+    if ! ip link show awg0 | grep -q ',UP'; then srv_log "awg0 не поднят (UP) - перезапускаю"; systemctl restart awg-quick@awg0
+    elif ! ss -lunH "sport = :$port" 2>/dev/null | grep -q .; then srv_log "порт $port не слушается - перезапускаю awg0"; systemctl restart awg-quick@awg0
+    elif ! nft list chain inet filter input 2>/dev/null | grep -q "udp dport $port"; then srv_log "в фильтре нет правила для порта $port - перезагружаю nftables"; systemctl restart nftables
+    fi
+  fi
+  [[ $(sysctl -n net.ipv4.ip_forward 2>/dev/null) == 1 ]] || { srv_log "ip_forward выключен - включаю"; sysctl -qw net.ipv4.ip_forward=1; }
+  if systemctl is-enabled --quiet ssh 2>/dev/null && ! systemctl is-active --quiet ssh && srv_guard ssh 300; then
+    srv_log "sshd не запущен - запускаю"; systemctl start ssh
+  fi
+}
+
+srv_heal_ip() { # снаружи сервер виден по адресу, которого нет на eth0 (Timeweb не обновил DHCP) - закрепляем его на интерфейсе
+  local pub pin n
+  [[ -f $NOPIN_FILE ]] && return 0
+  pub=$(srv_public_ip) || return 0
+  srv_private_ip "$pub" && return 0
+  pin=$(srv_pinned_ip)
+  if srv_ifaces_ipv4 | grep -qx "$pub"; then
+    put ip_seen none; put ip_seen_n 0
+    if [[ -n $pin && $pin != "$pub" ]]; then   # закрепка устарела: адрес уже приходит по DHCP или стал другим
+      srv_log "закреплённый адрес $pin устарел, снаружи видны как $pub - убираю закрепку"; rm -f "$PIN_FILE"; srv_netplan_apply
+    fi
+    return 0
+  fi
+  if [[ $(get ip_seen none) == "$pub" ]]; then n=$(( $(get ip_seen_n 0) + 1 )); else put ip_seen "$pub"; n=1; fi
+  put ip_seen_n "$n"
+  (( n >= 3 )) && srv_guard pin 1800 || return 0   # три проверки подряд, и не чаще раза в полчаса
+  srv_log "снаружи сервер виден как $pub, а на eth0 его нет (DHCP отдаёт $(srv_dhcp_ip)) - закрепляю адрес"
+  printf 'network:\n  version: 2\n  ethernets:\n    eth0:\n      addresses:\n        - %s/32\n' "$pub" > "$PIN_FILE"; chmod 600 "$PIN_FILE"
+  if srv_netplan_apply && srv_ifaces_ipv4 | grep -qx "$pub"; then srv_log "адрес $pub закреплён"
+  else srv_log "закрепить адрес $pub не вышло - убираю файл"; rm -f "$PIN_FILE"; srv_netplan_apply; fi
 }
 
 srv_heal_network() {
   local f t boots
+  systemctl is-active --quiet systemd-networkd || { srv_log "systemd-networkd не запущен - запускаю"; systemctl start systemd-networkd; }
+  ip link show eth0 2>/dev/null | grep -q ',UP' || { srv_log "eth0 не поднят - поднимаю"; ip link set eth0 up; }
+  if { [[ -z $(srv_ifaces_ipv4) ]] || ! ip -4 route show default | grep -q .; } && srv_guard netfix 120; then
+    srv_log "на eth0 нет IPv4 или маршрута по умолчанию - переподключаю"; networkctl reconfigure eth0
+  fi
   if srv_inet_ok; then
     (( $(get net_fails) > 0 )) && srv_log "интернет вернулся после $(get net_fails) мин"
     put net_fails 0; return 0
@@ -651,14 +719,14 @@ srv_follow_ip() {
   if [[ -f $BASE/mail_pending ]]; then
     mailpy --all --reason "$ROTATION_REASON" >/dev/null 2>&1 && rm -f "$BASE/mail_pending"
   fi
-  ip=$(srv_dhcp_ip)
+  ip=$(srv_effective_ip)
   [[ -z $ip || $ip == "$ENDPOINT_IP" ]] && return 0
   srv_log "публичный IPv4 сменился: $ENDPOINT_IP -> $ip"
   endpoint_change "$ip" >/dev/null 2>&1 || srv_log "рассылка после смены IP с ошибками, повторю"
 }
 
 srv_status() {
-  echo "IPv4 (DHCP)  : $(srv_dhcp_ip)   в конфигах: $ENDPOINT_IP"
+  echo "IPv4 (DHCP)  : $(srv_dhcp_ip)   в конфигах: $ENDPOINT_IP$([[ -n $(srv_pinned_ip) ]] && echo "   закреплён вручную/самолечением: $(srv_pinned_ip)")"
   echo "интернет     : $(srv_inet_ok && echo есть || echo НЕТ), минут без него: $(get net_fails)"
   echo "awg0         : $(ip link show awg0 >/dev/null 2>&1 && echo поднят || echo НЕТ), nftables: $(nft list table inet filter >/dev/null 2>&1 && echo загружен || echo НЕТ)"
   echo "рассылка     : $([[ -f $BASE/mail_pending ]] && echo "не завершена, дошло $(wc -l < "$BASE/mail_pending")" || echo ok)"
@@ -693,7 +761,7 @@ server_main() {
     check)
       exec 9>/run/vampn.lock; flock -n 9 || exit 0
       data_init; srv_heal_services
-      srv_heal_network && srv_follow_ip ;;
+      srv_heal_network && { srv_heal_ip; srv_follow_ip; } ;;
     status) data_init; srv_status ;;
     list)   data_init; users_list ;;
     peers)  data_init; users_peers ;;
