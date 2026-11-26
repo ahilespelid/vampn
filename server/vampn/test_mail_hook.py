@@ -138,12 +138,12 @@ class MailBody(unittest.TestCase):
 
 
 class Delivery(unittest.TestCase):
-    def deliver(self, m, method='smtp', already=False, ssh_out=b'sent', ssh_rc=0):
+    def deliver(self, m, method='smtp', already=False, ssh_out=b'sent', ssh_rc=0, fresh=True, smtp_host=None):
         rec = Recorder(result=mock.Mock(returncode=ssh_rc, stdout=ssh_out, stderr=b''))
         order = []
         smtp = lambda mm: order.append('smtp')
         with mock.patch.object(subprocess, 'run', rec), \
-                mock.patch.dict(NS, {'S': {'MAIL_METHOD': method}, 'smtp_send': smtp,
+                mock.patch.dict(NS, {'S': dict({'MAIL_METHOD': method}, **({'SMTP_HOST': smtp_host} if smtp_host else {})), 'smtp_send': smtp, 'relay_fresh': lambda: fresh,
                                      'mark_sent': lambda mm: order.append('mark'),
                                      'already_sent': lambda mm: already}):
             real = NS['notify_app']
@@ -169,6 +169,40 @@ class Delivery(unittest.TestCase):
 
     def test_relay_dup_is_dup(self):
         self.assertEqual(self.deliver(msg(), method='relay', ssh_out=b'dup')[0], 'dup')
+
+    def test_idle_tunnel_server_does_not_write_to_homeserv(self):
+        """Неактивный сервер не должен первым писать на homeserv: пир туннеля переехал бы на него."""
+        with self.assertRaises(RuntimeError):
+            self.deliver(msg(), method='relay', fresh=False)
+        rec = self.deliver(msg(), method='relay', fresh=False, smtp_host='smtp.example.com')[2]
+        self.assertNotIn('ssh', [c[0][0] for c in rec.calls])
+
+
+class RelayFresh(unittest.TestCase):
+    """relay_fresh: писать на homeserv можно, только пока он сам держит туннель (свежее рукопожатие пира 10.77.0.3)."""
+
+    def fresh(self, allowed, handshakes, now=1000000.0):
+        def run(cmd, **kw):
+            out = allowed if cmd[3] == 'allowed-ips' else handshakes
+            return mock.Mock(returncode=0, stdout=out, stderr='')
+        with mock.patch.object(subprocess, 'run', run), mock.patch.object(NS['time'], 'time', lambda: now):
+            return NS['relay_fresh']()
+
+    A = 'PKHOME\t10.77.0.3/32\nPKUSER\t10.77.0.9/32\n'
+
+    def test_fresh_handshake_allows(self):
+        self.assertTrue(self.fresh(self.A, 'PKHOME\t999900\nPKUSER\t5\n'))
+
+    def test_stale_or_missing_handshake_blocks(self):
+        self.assertFalse(self.fresh(self.A, 'PKHOME\t999000\nPKUSER\t999990\n'))
+        self.assertFalse(self.fresh(self.A, 'PKHOME\t0\n'))
+        self.assertFalse(self.fresh(self.A, ''))
+
+    def test_not_a_vpn_server_or_awg_missing_does_not_block(self):
+        self.assertTrue(self.fresh('PKUSER\t10.77.0.9/32\n', ''))
+        self.assertTrue(self.fresh('', ''))
+        with mock.patch.object(subprocess, 'run', mock.Mock(side_effect=FileNotFoundError)):
+            self.assertTrue(NS['relay_fresh']())
 
 
 class RelayEntry(unittest.TestCase):

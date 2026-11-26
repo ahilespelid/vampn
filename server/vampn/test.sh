@@ -73,6 +73,9 @@ wait_new_handshake() { echo "wait-hs since=$1 secs=$2" >> "$CALLS"; (( HS )); }
 # проверка нового адреса неактивного сервера на временном интерфейсе: по умолчанию отвечает как HS, PHS задаёт отдельно
 probe_handshake() { echo "probe $1 $2" >> "$CALLS"; (( ${PHS:-$HS} )); }
 notify() { echo "NOTIFY $1" >> "$CALLS"; }
+eval "$(declare -f announce_ip | sed '1s/^announce_ip/real_announce_ip/')"
+announce_ip() { echo "announce $1 $2" >> "$CALLS"; return "${ANN_RC:-0}"; }
+remote() { echo "remote $1" >> "$CALLS"; return "${REMOTE_RC:-0}"; }
 # раскатка скрипта: настоящая функция сохраняется как real_deploy_scripts (её проверяет раздел 8),
 # а check() в остальных тестах не ходит ни на Бостон, ни на сервер
 eval "$(declare -f deploy_scripts | sed '1s/^deploy_scripts/real_deploy_scripts/')"
@@ -696,36 +699,100 @@ ok "интернета нет 2 минуты: пока только счёт" "[
 srv_heal_network
 ok "3-я минута без интернета: переподключение eth0 (как раньше)" "grep -q 'SLOG переподключаю eth0' $CALLS"
 
-echo "-- закрепление адреса, который Timeweb не отдал по DHCP"
-env11; PUB=82.97.246.204; srv_heal_ip; srv_heal_ip
-ok "две проверки подряд: ничего не меняет" "[[ ! -e $PIN_FILE ]] && ! grep -q netplan $CALLS"
-srv_heal_ip
-ok "третья: адрес закреплён, netplan применён, адрес появился на eth0" "grep -q 'netplan apply' $CALLS && grep -q 'адрес 82.97.246.204 закреплён' $CALLS && [[ \$(srv_pinned_ip) == 82.97.246.204 ]] && srv_ifaces_ipv4 | grep -qx 82.97.246.204"
-ok "эффективный адрес для ключей - закреплённый, не устаревший DHCP" "[[ \$(srv_effective_ip) == 82.97.246.204 && \$(srv_dhcp_ip) == 129.101.120.50 ]]"
-: > "$CALLS"; srv_heal_ip
-ok "дальше тихо: адрес на интерфейсе, повторных действий нет" "! grep -q 'netplan' $CALLS && ! grep -q SLOG $CALLS"
-PUB=129.101.120.50; srv_heal_ip
-ok "снаружи видны по DHCP-адресу, закрепка другая - устарела, снимается" "[[ ! -e $PIN_FILE ]] && grep -q 'устарел' $CALLS && [[ \$(srv_effective_ip) == 129.101.120.50 ]]"
-
-env11; PUB=129.101.120.50; srv_heal_ip; srv_heal_ip; srv_heal_ip
-ok "снаружи виден адрес с eth0: ничего не делает" "[[ ! -e $PIN_FILE ]] && ! grep -q netplan $CALLS"
-env11; PUB=10.0.0.5; for i in 1 2 3 4; do srv_heal_ip; done
-ok "частный/серый адрес снаружи не закрепляется" "[[ ! -e $PIN_FILE ]]"
-env11; PUB=100.64.1.1; for i in 1 2 3 4; do srv_heal_ip; done
-ok "адрес CGNAT 100.64.x не закрепляется" "[[ ! -e $PIN_FILE ]]"
-env11; unset PUB; for i in 1 2 3 4; do srv_heal_ip; done
-ok "внешние сервисы не ответили: ничего не делает" "[[ ! -e $PIN_FILE ]] && ! grep -q netplan $CALLS"
-env11; PUB=82.97.246.204; touch "$NOPIN_FILE"; for i in 1 2 3 4; do srv_heal_ip; done
+echo "-- homeserv сообщил адрес, который Timeweb не отдал по DHCP"
+expect_now() { put expect_ip "$1 $(now)"; }
+env11; srv_pin_expected
+ok "сообщений нет: ничего не делает" "! grep -q netplan $CALLS"
+env11; expect_now 82.97.246.204; srv_pin_expected
+ok "адреса нет на eth0: закреплён, netplan применён, адрес появился" "grep -q 'netplan apply' $CALLS && grep -q 'адрес 82.97.246.204 закреплён' $CALLS && [[ \$(srv_pinned_ip) == 82.97.246.204 ]] && srv_ifaces_ipv4 | grep -qx 82.97.246.204"
+ok "для ключей берётся сообщённый адрес, а не устаревший DHCP" "[[ \$(srv_effective_ip) == 82.97.246.204 && \$(srv_dhcp_ip) == 129.101.120.50 ]]"
+: > "$CALLS"; srv_pin_expected
+ok "дальше тихо: адрес уже на интерфейсе" "! grep -q 'netplan' $CALLS && ! grep -q SLOG $CALLS"
+FAKE_NOW=$((FAKE_NOW+901))
+ok "сообщению больше 15 минут: для ключей снова DHCP-адрес (не верим старому)" "[[ \$(srv_effective_ip) == 129.101.120.50 ]]"
+env11; expect_now 129.101.120.50; srv_pin_expected
+ok "сообщённый адрес и так приходит по DHCP: ничего не делает" "[[ ! -e $PIN_FILE ]] && ! grep -q netplan $CALLS && [[ \$(srv_effective_ip) == 129.101.120.50 ]]"
+env11; put expect_ip "82.97.246.204 $((FAKE_NOW-901))"; srv_pin_expected
+ok "устаревшее сообщение (старше 15 минут) не закрепляется" "[[ ! -e $PIN_FILE ]] && ! grep -q netplan $CALLS"
+env11; expect_now 82.97.246.204; touch "$NOPIN_FILE"; srv_pin_expected
 ok "файл no-pin запрещает закрепление" "[[ ! -e $PIN_FILE ]]"
-env11; PUB=82.97.246.204; srv_heal_ip; PUB=82.97.246.205; srv_heal_ip; srv_heal_ip; PUB=82.97.246.204; srv_heal_ip
-ok "адрес снаружи прыгает: счёт подряд идущих проверок сбрасывается, закрепки нет" "[[ ! -e $PIN_FILE ]]"
-env11; PUB=82.97.246.204; NETPLAN_RC=1; srv_heal_ip; srv_heal_ip; srv_heal_ip
+env11; expect_now 82.97.246.204; NETPLAN_RC=1; srv_pin_expected
 ok "netplan не применился: закрепка не остаётся, в журнале причина" "[[ ! -e $PIN_FILE ]] && grep -q 'закрепить адрес 82.97.246.204 не вышло' $CALLS"
-env11; PUB=82.97.246.204; srv_heal_ip; srv_heal_ip; srv_heal_ip; PUB=82.97.246.100; srv_heal_ip; srv_heal_ip; srv_heal_ip
-ok "после закрепки не чаще раза в полчаса" "[[ \$(srv_pinned_ip) == 82.97.246.204 ]]"
-FAKE_NOW=$((FAKE_NOW+1801)); srv_heal_ip; srv_heal_ip; srv_heal_ip
-ok "через полчаса, если адрес снаружи снова не на интерфейсе, закрепка заменяется" "[[ \$(srv_pinned_ip) == 82.97.246.100 ]]"
+: > "$CALLS"; srv_pin_expected
+ok "повтор не чаще раза в 2 минуты" "! grep -q 'закрепляю' $CALLS"
+env11; out=$( (srv_expect_ip 82.97.246.204) 2>&1 ); rc=$?
+ok "команда expect-ip: принимает, записывает с меткой времени и сразу закрепляет" "[[ $rc == 0 && \$out == 'ok 82.97.246.204' && \$(srv_expect) == \"82.97.246.204 \$(now)\" && \$(srv_pinned_ip) == 82.97.246.204 ]]"
+for bad in "" "abc" "82.97.246" "82.97.246.204; rm -rf /" "10.0.0.5" "192.168.1.1" "100.64.1.1" "172.20.0.1" "127.0.0.1"; do
+  env11; out=$( (srv_expect_ip "$bad") 2>&1 ); rc=$?
+  ok "expect-ip отвергает «$bad»" "[[ $rc != 0 && ! -e $PIN_FILE && \$(srv_expect) == 'none 0' ]]"
+done
 
+echo "== 12. homeserv сообщает серверу его адрес"
+ip_routed() { grep -qx "$1" "$T/routed"; }; SRV_RC=0; REMOTE_RC=0; ANN_RC=0   # заглушки раздела 1 (раздел 7 подставлял настоящую ip_routed)
+reset; printf '9.9.9.9\n' > "$T/ips"
+push_expect
+ok "активному серверу уходит его адрес из Timeweb" "grep -q 'remote expect-ip 9.9.9.9' $CALLS && [[ \$(get expect_pushed) == '9.9.9.9 1000000' ]]"
+: > "$CALLS"; FAKE_NOW=$((FAKE_NOW+60)); push_expect
+ok "тот же адрес повторно не шлётся раньше чем через 5 минут" "! grep -q 'remote expect-ip' $CALLS"
+FAKE_NOW=$((FAKE_NOW+250)); push_expect
+ok "через 5 минут - обновляет (серверу он верен 15 минут)" "grep -q 'remote expect-ip 9.9.9.9' $CALLS"
+: > "$CALLS"; printf '8.8.8.8\n' > "$T/ips"; push_expect
+ok "адрес в Timeweb поменялся - шлётся сразу" "grep -q 'remote expect-ip 8.8.8.8' $CALLS"
+: > "$CALLS"; REMOTE_RC=1; FAKE_NOW=$((FAKE_NOW+400)); push_expect; rc=$?
+ok "сервер не принял - метка не обновляется, вернулась 1, повтор в следующую минуту" "[[ $rc == 1 && \$(get expect_pushed) != *\" \$FAKE_NOW\" ]]"
+REMOTE_RC=0
+echo "-- перед удалением старого IP новый сообщается серверу"
+reset; printf '9.9.9.9\n' > "$T/ips"; printf 'A1\n' > "$T/cands"; HS=1; routed_list A1
+attempt 1 >/dev/null 2>&1
+ok "активный сервер: адрес A1 сообщён ДО удаления старого IP" "grep -q 'announce 9.9.9.9 A1' $CALLS && [[ \$(grep -n 'announce' $CALLS | cut -d: -f1) -lt \$(grep -n 'DELETE-ip 9.9.9.9' $CALLS | cut -d: -f1) ]]"
+reset; printf '9.9.9.9\n' > "$T/ips"; printf 'A1\n' > "$T/cands"; HS=1; routed_list A1; ANN_RC=1
+attempt 1 >/dev/null 2>&1; rc=$?
+ok "сообщить не вышло - попытка всё равно идёт дальше (сервер получит адрес по DHCP)" "[[ $rc == 0 ]] && grep -q 'DELETE-ip 9.9.9.9' $CALLS"
+ANN_RC=0
+alive() { return "${ALIVE_RC:-0}"; }
+remote() { echo "remote $1" >> "$CALLS"; return "${REMOTE_RC:-0}"; }
+SSH_SRV=(srv_ssh); srv_ssh() { echo "srv_ssh $*" >> "$CALLS"; return "${SRV_RC:-0}"; }
+reset; put active_target 1; n=1; ALIVE_RC=0; real_announce_ip 9.9.9.9 A1
+ok "активный: через туннель, командой expect-ip" "grep -q 'remote expect-ip A1' $CALLS && grep -q 'LOG \[основной\] серверу сообщён новый адрес A1 (через туннель)' $CALLS"
+reset; put active_target 1; n=1; ALIVE_RC=1; real_announce_ip 9.9.9.9 A1; rc=$?
+ok "активный, туннель мёртв: не вышло, в журнале причина" "[[ $rc == 1 ]] && ! grep -q 'remote expect-ip' $CALLS && grep -q 'сообщить не вышло' $CALLS"
+reset; put active_target 1; n=2; TSUF=_2; real_announce_ip 8.8.8.8 Y1; rc=$?; TSUF=""
+ok "неактивный: напрямую на старый адрес, HostKeyAlias как у туннельного адреса" "[[ $rc == 0 ]] && grep -q 'srv_ssh .*-o HostKeyAlias=10.77.0.1 .*root@8.8.8.8 expect-ip Y1' $CALLS && ! grep -q 'remote expect-ip' $CALLS"
+reset; put active_target 1; n=2; SRV_RC=255; real_announce_ip 8.8.8.8 Y1; rc=$?; SRV_RC=0
+ok "неактивный, порт 22 закрыт: не вышло, без паники" "[[ $rc == 1 ]] && grep -q 'сообщить не вышло' $CALLS"
+reset; put active_target 1; n=2; real_announce_ip "" Y1; rc=$?
+ok "неактивный без старого адреса: слать некуда, не вышло" "[[ $rc == 1 ]] && ! grep -q 'srv_ssh' $CALLS"
+echo "== 13. туннель не уезжает на сервер, который написал первым; свой отпечаток у каждого сервера; unpin"
+eval "$(sed -n '/^tun_keep_endpoint()/,/^}/p' "$FILE")"
+eval "$(sed -n '/^srv_ssh_init()/,/^}/p' "$FILE")"
+eval "$(sed -n '/^srv_unpin()/,/^}/p' "$FILE")"
+awg() { case "$*" in "show lo endpoints") [[ -n ${RT_EP:-} ]] && printf 'PK\t%s\n' "$RT_EP" ;; "show lo peers") echo PK ;; set*) echo "awg $*" >> "$CALLS" ;; esac; }
+reset; RT_EP=72.56.116.188:49029; tun_keep_endpoint
+ok "пир уехал на другой сервер: возвращён на заданный адрес (в конфиге), запись в журнале" "grep -q 'awg set lo peer PK endpoint 9.9.9.9:49029' $CALLS && grep -q 'LOG туннель уехал на 72.56.116.188' $CALLS"
+reset; RT_EP=9.9.9.9:49029; tun_keep_endpoint
+ok "пир там, где велено: ничего не делает" "! grep -q 'awg set' $CALLS"
+reset; RT_EP=""; tun_keep_endpoint
+ok "у пира нет адреса (ещё не было связи): ничего не делает" "! grep -q 'awg set' $CALLS"
+
+VAMPN_ETC=$T/etc; mkdir -p "$VAMPN_ETC"; echo mirror > "$VAMPN_ETC/mirror.known_hosts"
+TARGET=1; srv_ssh_init
+ok "нет своего файла отпечатков: общий mirror.known_hosts, как раньше" "[[ \"\${SSH_SRV[*]}\" == *\"UserKnownHostsFile=$VAMPN_ETC/mirror.known_hosts\"* ]]"
+echo main > "$VAMPN_ETC/known_hosts_1"; echo spare > "$VAMPN_ETC/known_hosts_2"
+TARGET=1; srv_ssh_init
+ok "основной: свой файл отпечатков" "[[ \"\${SSH_SRV[*]}\" == *\"UserKnownHostsFile=$VAMPN_ETC/known_hosts_1\"* ]]"
+TARGET=2; srv_ssh_init
+ok "запасной: свой файл отпечатков" "[[ \"\${SSH_SRV[*]}\" == *\"UserKnownHostsFile=$VAMPN_ETC/known_hosts_2\"* ]]"
+ok "ключи ssh остаются прежними (только ключ users, без паролей и чужих ключей)" "[[ \"\${SSH_SRV[*]}\" == *'IdentitiesOnly=yes'* && \"\${SSH_SRV[*]}\" == *'BatchMode=yes'* ]]"
+TARGET=1; unset VAMPN_ETC
+
+echo "-- unpin: сервер получил чужой адрес"
+env11; BASE=$T/base; CL=$BASE/clients; mkdir -p "$CL"; echo 82.97.246.204 > "$BASE/endpoint"; ENDPOINT_IP=82.97.246.204
+touch "$CL/ann.env" "$CL/bob.env"; : > "$BASE/mail_pending"; put expect_ip "82.97.246.204 $(now)"
+printf 'network:\n  addresses:\n    - 82.97.246.204/32\n' > "$PIN_FILE"; echo 82.97.246.204 >> "$T/ifaddrs"
+render() { echo "render $1" >> "$CALLS"; }
+out=$( (srv_unpin) 2>&1 )
+ok "закрепление и сообщение об адресе сняты, рассылка отменена" "[[ ! -e $PIN_FILE && ! -e $STATE/expect_ip && ! -e $BASE/mail_pending ]] && grep -q 'netplan apply' $CALLS"
+ok "адрес сервера возвращён из DHCP, конфиги пользователей пересобраны (письма не рассылаются)" "[[ \$(cat $BASE/endpoint) == 129.101.120.50 ]] && grep -q 'render ann' $CALLS && grep -q 'render bob' $CALLS && [[ \$out == 'ok 129.101.120.50' ]]"
 echo; echo "итого: $pass прошло, $failn не прошло"
 rm -rf "$T"
 [[ $failn == 0 ]]

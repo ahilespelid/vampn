@@ -228,9 +228,27 @@ def notify_app(m):
         pass
 
 
+def relay_fresh():
+    """Сервер пишет на homeserv только пока homeserv сам держит с ним туннель. У основного и запасного одни ключи:
+    первое же письмо с неактивного сервера утащило бы туннель homeserv на него (пир «переезжает» на того, кто написал)."""
+    try:
+        ak = subprocess.run(['awg', 'show', 'awg0', 'allowed-ips'], capture_output=True, text=True, timeout=5).stdout
+        pk = next((l.split()[0] for l in ak.splitlines() if '10.77.0.3/32' in l.split()[1:]), None)
+        if not pk:
+            return True    # это не VPN-сервер или homeserv у него не пир - не мешаем
+        hs = subprocess.run(['awg', 'show', 'awg0', 'latest-handshakes'], capture_output=True, text=True, timeout=5).stdout
+        t = next((int(l.split()[1]) for l in hs.splitlines() if l.split() and l.split()[0] == pk), 0)
+        return time.time() - t < 240
+    except Exception:
+        return True
+
+
 def deliver(m):
     """Отправить одно письмо. Возвращает 'sent' или 'dup'."""
-    if S.get('MAIL_METHOD', 'smtp').lower() == 'relay':
+    if S.get('MAIL_METHOD', 'smtp').lower() == 'relay' and not relay_fresh():
+        if not S.get('SMTP_HOST'):
+            raise RuntimeError('relay skipped: homeserv сейчас не держит туннель с этим сервером')
+    elif S.get('MAIL_METHOD', 'smtp').lower() == 'relay':
         r = subprocess.run(
             ['ssh', '-i', '/root/.ssh/mailrelay', '-p', S.get('RELAY_PORT', '777'),
              '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'IdentitiesOnly=yes', '-o', 'LogLevel=ERROR',
@@ -622,24 +640,18 @@ srv_dhcp_ip() { ip -4 -o addr show dev eth0 scope global dynamic | awk '{split($
 SRV_AWG_CONF=/etc/amnezia/amneziawg/awg0.conf
 PIN_FILE=/etc/netplan/60-vampn-ip.yaml   # закреплённый адрес, если Timeweb по DHCP отдаёт не тот
 NOPIN_FILE=/etc/vampn/no-pin             # есть такой файл - сервер сам адрес не закрепляет
+EXPECT_TTL=900                           # сообщению homeserv об адресе верим 15 минут (он обновляет его раз в 5)
 srv_guard() { # ключ секунд - 0, если с прошлого раза прошло достаточно (не даёт лечению крутиться каждую минуту)
   local t; t=$(now); (( t - $(get "guard_$1" 0) >= $2 )) || return 1; put "guard_$1" "$t"
 }
 srv_port() { awk -F' *= *' '/^ListenPort/{print $2; exit}' "$SRV_AWG_CONF" 2>/dev/null; }
 srv_ifaces_ipv4() { ip -4 -o addr show dev eth0 scope global 2>/dev/null | awk '{split($4,a,"/"); print a[1]}'; }
 srv_pinned_ip() { [[ -f $PIN_FILE ]] && grep -Eo '[0-9]{1,3}(\.[0-9]{1,3}){3}' "$PIN_FILE" | head -1; }
-srv_public_ip() { # адрес, под которым сервер виден снаружи (по трём сервисам, первый ответивший)
-  local u ip
-  for u in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
-    ip=$(curl -4 -s -m 6 "$u" 2>/dev/null | tr -d '[:space:]')
-    [[ $ip =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && { echo "$ip"; return 0; }
-  done
-  return 1
-}
 srv_private_ip() { [[ $1 =~ ^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.) ]]; }
-srv_effective_ip() { # адрес сервера для ключей: закреплённый (если он на интерфейсе), иначе от DHCP
-  local p; p=$(srv_pinned_ip)
-  if [[ -n $p ]] && srv_ifaces_ipv4 | grep -qx "$p"; then echo "$p"; else srv_dhcp_ip; fi
+srv_expect() { get expect_ip "none 0"; }   # "IP метка_времени": какой адрес Timeweb выдал серверу, по словам homeserv
+srv_effective_ip() { # адрес сервера для ключей: свежее сообщение homeserv (если этот адрес на eth0), иначе от DHCP
+  local e ip ts; e=$(srv_expect); ip=${e% *}; ts=${e#* }
+  if [[ $ip != none ]] && (( $(now) - ts < EXPECT_TTL )) && srv_ifaces_ipv4 | grep -qx "$ip"; then echo "$ip"; else srv_dhcp_ip; fi
 }
 srv_netplan_apply() { netplan generate >/dev/null 2>&1 && netplan apply >/dev/null 2>&1; }
 
@@ -661,28 +673,38 @@ srv_heal_services() {
   fi
 }
 
-srv_heal_ip() { # снаружи сервер виден по адресу, которого нет на eth0 (Timeweb не обновил DHCP) - закрепляем его на интерфейсе
-  local pub pin n
-  [[ -f $NOPIN_FILE ]] && return 0
-  pub=$(srv_public_ip) || return 0
-  srv_private_ip "$pub" && return 0
-  pin=$(srv_pinned_ip)
-  if srv_ifaces_ipv4 | grep -qx "$pub"; then
-    put ip_seen none; put ip_seen_n 0
-    if [[ -n $pin && $pin != "$pub" ]]; then   # закрепка устарела: адрес уже приходит по DHCP или стал другим
-      srv_log "закреплённый адрес $pin устарел, снаружи видны как $pub - убираю закрепку"; rm -f "$PIN_FILE"; srv_netplan_apply
-    fi
-    return 0
-  fi
-  if [[ $(get ip_seen none) == "$pub" ]]; then n=$(( $(get ip_seen_n 0) + 1 )); else put ip_seen "$pub"; n=1; fi
-  put ip_seen_n "$n"
-  (( n >= 3 )) && srv_guard pin 1800 || return 0   # три проверки подряд, и не чаще раза в полчаса
-  srv_log "снаружи сервер виден как $pub, а на eth0 его нет (DHCP отдаёт $(srv_dhcp_ip)) - закрепляю адрес"
-  printf 'network:\n  version: 2\n  ethernets:\n    eth0:\n      addresses:\n        - %s/32\n' "$pub" > "$PIN_FILE"; chmod 600 "$PIN_FILE"
-  if srv_netplan_apply && srv_ifaces_ipv4 | grep -qx "$pub"; then srv_log "адрес $pub закреплён"
-  else srv_log "закрепить адрес $pub не вышло - убираю файл"; rm -f "$PIN_FILE"; srv_netplan_apply; fi
+srv_pin_expected() { # homeserv сказал, какой адрес выдан серверу; если его нет на eth0 (Timeweb не отдал по DHCP) - закрепляем
+  local e ip ts
+  e=$(srv_expect); ip=${e% *}; ts=${e#* }
+  [[ $ip == none || -f $NOPIN_FILE ]] && return 0
+  (( $(now) - ts < EXPECT_TTL )) || return 0       # сообщение устарело (homeserv давно не выходил на связь) - не верим
+  srv_ifaces_ipv4 | grep -qx "$ip" && return 0
+  srv_guard pin 120 || return 0
+  srv_log "homeserv сообщил адрес $ip, а на eth0 его нет (DHCP отдаёт $(srv_dhcp_ip)) - закрепляю"
+  printf 'network:\n  version: 2\n  ethernets:\n    eth0:\n      addresses:\n        - %s/32\n' "$ip" > "$PIN_FILE"; chmod 600 "$PIN_FILE"
+  if srv_netplan_apply && srv_ifaces_ipv4 | grep -qx "$ip"; then srv_log "адрес $ip закреплён"
+  else srv_log "закрепить адрес $ip не вышло - убираю файл"; rm -f "$PIN_FILE"; srv_netplan_apply; fi
 }
 
+srv_unpin() { # команда homeserv: снять закрепление адреса и забыть сообщение об адресе (если сервер получил чужой), вернуть адрес из DHCP
+  local ip f
+  rm -f "$PIN_FILE" "$STATE/expect_ip" "$BASE/mail_pending"; srv_netplan_apply
+  ip=$(srv_dhcp_ip)
+  if [[ -n $ip && $ip != "$ENDPOINT_IP" ]]; then
+    echo "$ip" > "$BASE/endpoint"; ENDPOINT_IP=$ip
+    for f in "$CL"/*.env; do [[ -f $f ]] && render "$(basename "$f" .env)"; done
+  fi
+  srv_log "закрепление снято по команде homeserv, адрес сервера: ${ip:-?}"; echo "ok ${ip:-?}"
+}
+
+srv_expect_ip() { # IP - команда homeserv (ключ users): адрес, выданный этому серверу в Timeweb
+  local ip=${1:-}
+  [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "плохой IP: $ip"
+  srv_private_ip "$ip" && die "частный адрес $ip не принимаю"
+  put expect_ip "$ip $(now)"
+  srv_pin_expected
+  echo "ok $ip"
+}
 srv_heal_network() {
   local f t boots
   systemctl is-active --quiet systemd-networkd || { srv_log "systemd-networkd не запущен - запускаю"; systemctl start systemd-networkd; }
@@ -761,17 +783,20 @@ server_main() {
     check)
       exec 9>/run/vampn.lock; flock -n 9 || exit 0
       data_init; srv_heal_services
-      srv_heal_network && { srv_heal_ip; srv_follow_ip; } ;;
+      srv_pin_expected; srv_heal_network && srv_follow_ip ;;
     status) data_init; srv_status ;;
     list)   data_init; users_list ;;
     peers)  data_init; users_peers ;;
     reissue|resend|link) data_init; srv_user_cmd "$@" ;;
     users-push) data_init; srv_users_push ;;
+    expect-ip)  data_init; srv_expect_ip "${2:-}" ;;
+    unpin)      data_init; srv_unpin ;;
     remote)  # принудительная команда ключа homeserv: разрешён только этот список действий
       local a; read -r -a a <<<"${SSH_ORIGINAL_COMMAND:-users-push}"
       case ${a[0]:-} in
         users-push|list|peers|status|selfupdate) exec "$SELF" "${a[0]}" ;;
-        reissue|resend|link)    exec "$SELF" "${a[0]}" "${a[1]:-}" ;;
+        reissue|resend|link|expect-ip)    exec "$SELF" "${a[0]}" "${a[1]:-}" ;;
+        unpin)    exec "$SELF" unpin ;;
         *) die "команда не разрешена: ${a[0]:-}" ;;
       esac ;;
     *) echo "vampn: неизвестная команда «$cmd»" >&2; usage 1 ;;
@@ -863,8 +888,13 @@ ROTATE_RETRY=180 ROTATE_RETRY_SLOW=300 ATT_FAST=3 ATT_MAX=20   # попытки 
 MAX_ROT_PER_DAY=4 MIRROR_EVERY=600
 IP_LIMIT=10 IP_RESERVE=1   # Timeweb даёт 10 новых IP в сутки на аккаунт (считается каждый созданный, даже удалённый); 1 оставляем на ручную смену
 EM_AT=3 HS_WAIT=150 HS_WAIT_EXTRA=120
-SSH_SRV=(ssh -T -o LogLevel=ERROR -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10
-         -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/vampn/mirror.known_hosts)
+srv_ssh_init() { # свой отпечаток ключа у каждого сервера (/etc/vampn/known_hosts_1 и _2): ключи tunnel-пира у серверов одни, а хосты разные,
+  # и homeserv не должен молча говорить не с тем сервером. Нет файла - общий mirror.known_hosts, как раньше.
+  local d=${VAMPN_ETC:-/etc/vampn} kh; kh=$d/mirror.known_hosts; [[ -s $d/known_hosts_${TARGET:-1} ]] && kh=$d/known_hosts_${TARGET:-1}
+  SSH_SRV=(ssh -T -o LogLevel=ERROR -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10
+           -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$kh")
+}
+srv_ssh_init
 
 log() { echo "$(date '+%F %T') $*" | tee -a "$STATE/vampn.log" >&2; }
 notify() { # текст [mail]
@@ -924,6 +954,7 @@ tw_use() { # 1|2 - с какого сервера Timeweb работаем да�
   set -a; . "$f"; set +a
   : "${TIMEWEB_TOKEN:?нет TIMEWEB_TOKEN в $f}" "${TIMEWEB_SERVER_ID:?нет TIMEWEB_SERVER_ID в $f}"
   TARGET=${1:-1}; TSUF=""; [[ $TARGET == 2 ]] && TSUF=_2
+  srv_ssh_init
   return 0
 }
 tw_init() { tw_use "$(get active_target 1)" || tw_use 1; }
@@ -963,6 +994,14 @@ tun_set_endpoint() { # IP - перевести свой туннель на но
   log "туннель -> $ip:$p"
 }
 
+tun_keep_endpoint() { # пир туннеля «переезжает» на того, кто написал первым; если уехал не туда, куда велено - возвращаем
+  local rt want p; want=$(tun_endpoint); p=$(tun_port)
+  rt=$(awg show "$IFACE" endpoints 2>/dev/null | awk '{split($2,a,":"); print a[1]; exit}')
+  [[ -n $rt && -n $want && $rt != "$want" ]] || return 0
+  log "туннель уехал на $rt (сервер написал первым) - возвращаю на $want"
+  awg set "$IFACE" peer "$(awg show "$IFACE" peers | head -1)" endpoint "$want:$p"
+}
+
 wait_new_handshake() { # метка_времени секунд - рукопожатие должно быть НОВЕЕ метки и сервер отвечает через туннель
   local since=$1 end=$(( $(now) + $2 )) t ok
   while (( $(now) < end )); do
@@ -994,6 +1033,25 @@ pull_mirror() { # копия данных пользователей с серв
 }
 
 remote() { "${SSH_SRV[@]}" -i /etc/vampn/users.key root@10.77.0.1 "$1" </dev/null; }
+push_expect() { # [IP] - сообщить активному VPN-серверу, какой адрес ему выдан в Timeweb (он закрепит его, если Timeweb не отдал по DHCP)
+  local ip=${1:-} last t; t=$(now)
+  [[ -n $ip ]] || ip=$(main_ipv4); [[ -n $ip ]] || return 1
+  last=$(get "expect_pushed$TSUF" "none 0")
+  [[ -z ${1:-} && ${last% *} == "$ip" ]] && (( t - ${last#* } < EXPECT_EVERY )) && return 0
+  if remote "expect-ip $ip" >/dev/null 2>&1; then put "expect_pushed$TSUF" "$ip $t"; return 0; fi
+  return 1
+}
+announce_ip() { # СТАРЫЙ НОВЫЙ - перед удалением старого IP сообщить серверу новый: активному - через туннель, неактивному - прямо на старый адрес (порт 22, если открыт)
+  local old=$1 new=$2 out=""
+  if [[ $n == "$(get active_target 1)" ]]; then
+    alive && remote "expect-ip $new" >/dev/null 2>&1 && { log "[$(tw_label)] серверу сообщён новый адрес $new (через туннель)"; return 0; }
+  elif [[ -n $old ]]; then
+    out=$("${SSH_SRV[@]}" -i /etc/vampn/users.key -o HostKeyAlias=10.77.0.1 -o ConnectTimeout=8 "root@$old" "expect-ip $new" </dev/null 2>&1) \
+      && { log "[$(tw_label)] серверу сообщён новый адрес $new (напрямую на $old)"; return 0; }
+  fi
+  [[ -n $out ]] && out=" [$(tail -c 80 <<<"$out" | tr '\n' ' ')]"
+  log "[$(tw_label)] серверу новый адрес $new сообщить не вышло$out - сервер получит его по DHCP"; return 1
+}
 
 push_users() { # [force] - users.conf изменился -> отправить на сервер и применить
   local f=/etc/vampn/users.conf sum out changes
@@ -1171,6 +1229,7 @@ attempt() { # N [--force]: одна попытка вернуть связь ч�
   fi
   new=$cand
   log "[$(tw_label)] новый IPv4 $new: трасса проходит"
+  announce_ip "$old" "$new" || true   # пока старый адрес ещё жив: сервер закрепит новый на eth0, даже если Timeweb не отдаст его по DHCP
   if [[ -n $old ]]; then
     resp=$(api DELETE "/servers/$TIMEWEB_SERVER_ID/ips" "{\"ip\":\"$old\"}")
     sleep 5
@@ -1272,6 +1331,7 @@ zebra() { # шаг «зебры» из check(): очередная попытк�
 # Скрипт на всех серверах должен быть одним и тем же. Сторож сам отправляет свой скрипт тем, у кого он другой:
 # на Бостон - по аварийному ключу, на активный VPN-сервер - по ключу users (оба с принудительной командой vampn remote,
 # команда selfupdate). Сервер ставит присланный скрипт только если он целый, старый остаётся как vampn.prev.
+EXPECT_EVERY=300   # адрес сервера повторно сообщается раз в 5 минут (серверу он верен 15)
 DEPLOY_EVERY=600   # неудавшуюся отправку повторять не чаще раза в 10 минут
 deploy_scripts() { # [force] - отправить скрипт тем, у кого он другой; force - всем заново
   local h t a out
@@ -1301,6 +1361,7 @@ check() {
   exec 9>"$STATE/lock"; flock -n 9 || exit 0
   local fails st cur t
   tw_use "$(get active_target 1)" || tw_use 1
+  em_active || tun_keep_endpoint
   deploy_scripts
   if em_active; then
     em_init
@@ -1329,6 +1390,7 @@ check() {
       if [[ $pend == "$(tun_endpoint)" ]]; then mail_from_mirror "$pend" && rm -f "$STATE/keys_pending"; else rm -f "$STATE/keys_pending"; fi
     fi
     push_users
+    push_expect >/dev/null 2>&1 || true
     (( $(now) - $(get last_mirror) >= MIRROR_EVERY )) && pull_mirror
     return 0
   fi
