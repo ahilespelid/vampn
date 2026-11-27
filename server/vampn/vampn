@@ -1657,7 +1657,7 @@ SPAWN_LOC=nl-1 SPAWN_ZONE=ams-1   # ячейка N>=2: туннель и кли�
 twa() { # ТОКЕН МЕТОД ПУТЬ [ТЕЛО] - вызов API Timeweb от имени кабинета (не трогает глобальный TIMEWEB_TOKEN)
   curl -sS -m 40 -X "$2" -H "Authorization: Bearer $1" -H 'Content-Type: application/json' ${4:+-d "$4"} "$API$3"
 }
-valid_acct() { [[ $1 =~ ^[a-z0-9_-]{1,24}$ ]] || die "имя кабинета: латиница в нижнем регистре, цифры, _ - (до 24 знаков)"; }
+valid_acct() { [[ $1 =~ ^[a-z0-9][a-z0-9_-]{0,23}$ ]] || die "имя кабинета: латиница в нижнем регистре, цифры, _ - (до 24 знаков)"; }
 acct_file() { # имя кабинета -> файл с TIMEWEB_TOKEN. main и spare - прежние timeweb.env и timeweb2.env
   case $1 in
     main|1)  echo "$ETC_DIR/timeweb.env" ;;
@@ -1669,7 +1669,7 @@ acct_names() { [[ -f $ETC_DIR/timeweb.env ]] && echo main; [[ -f $ETC_DIR/timewe
   local f; for f in "$ACCT_DIR"/*.env; do [[ -f $f ]] && basename "$f" .env; done; true; }
 acct_token() { local f; f=$(acct_file "$1") && [[ -f $f ]] || return 1; ( set -a; . "$f"; set +a; echo "${TIMEWEB_TOKEN:-}" ); }
 acct_default() { local d f; d=$(cat "$ACCT_DIR/default" 2>/dev/null)
-  if [[ $d =~ ^[a-z0-9_-]{1,24}$ ]]; then f=$(acct_file "$d"); [[ -f $f ]] && { echo "$d"; return; }; fi
+  if [[ $d =~ ^[a-z0-9][a-z0-9_-]{0,23}$ ]]; then f=$(acct_file "$d"); [[ -f $f ]] && { echo "$d"; return; }; fi
   echo main; }
 
 account_main() {
@@ -1686,8 +1686,18 @@ account_main() {
       [[ -f $ACCT_DIR/default ]] || echo "$name" > "$ACCT_DIR/default"
       echo "кабинет $name добавлен: баланс $(jq -r '.finances.balance' <<<"$resp") $(jq -r '.finances.currency' <<<"$resp")" ;;
     list)
+      local n t r def tsv=0; def=$(acct_default); [[ ${name:-} == --tsv ]] && tsv=1
+      if (( tsv )); then   # для API: имя, состояние (ok|denied|none), баланс, валюта, по умолчанию (1/0), сообщение - через табуляцию, без токенов
+        for n in $(acct_names); do
+          t=$(acct_token "$n") || t=""
+          if [[ -z $t ]]; then printf '%s\tnone\t\t\t0\t\n' "$n"; continue; fi
+          r=$(twa "$t" GET /account/finances 2>/dev/null)
+          if jq -e '.finances' >/dev/null 2>&1 <<<"$r"; then printf '%s\tok\t%s\t%s\t%s\t\n' "$n" "$(jq -r '.finances.balance' <<<"$r")" "$(jq -r '.finances.currency' <<<"$r")" "$([[ $n == "$def" ]] && echo 1 || echo 0)"
+          else printf '%s\tdenied\t\t\t%s\t%s\n' "$n" "$([[ $n == "$def" ]] && echo 1 || echo 0)" "$(jq -r '.message // "нет ответа"' <<<"$r" 2>/dev/null | tr '\t\n' '  ')"; fi
+        done
+        return 0
+      fi
       printf '%-12s %-9s %s\n' КАБИНЕТ ТОКЕН СЕРВЕРОВ/БАЛАНС
-      local n t r def; def=$(acct_default)
       for n in $(acct_names); do
         t=$(acct_token "$n") || t=""
         if [[ -z $t ]]; then printf '%-12s %-9s\n' "$n" нет; continue; fi

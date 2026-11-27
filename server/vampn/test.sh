@@ -921,8 +921,10 @@ acc_out=$( printf 'tok-new-0000000000000000000\n' | account_main add second 2>&1
 ok "account add: токен принят, файл 600, в выводе токена нет" '[[ $acc_rc == 0 && -f $ACCT_DIR/second.env && $(stat -c %a $ACCT_DIR/second.env) == 600 && $acc_out != *tok-new* && $acc_out == *5000* ]]'
 ok "account add: первый добавленный становится кабинетом по умолчанию" '[[ $(cat $ACCT_DIR/default) == second && $(acct_default) == second ]]'
 TW_TOKEN_OK=0; ok "account add: Timeweb не принял токен - файл не создан" '! (printf "tok-bad-000000000000000000\n" | account_main add bad) >/dev/null 2>&1 && [[ ! -f $ACCT_DIR/bad.env ]]'; TW_TOKEN_OK=1
+ok "имя кабинета не может начинаться с дефиса (не станет параметром)" '! (echo tok-aaaaaaaaaaaaaaaaaaaaa | account_main add -x) >/dev/null 2>&1 && ! (echo tok-aaaaaaaaaaaaaaaaaaaaa | account_main add --force) >/dev/null 2>&1'
 ok "account add: мусор вместо токена и плохое имя отклоняются" '! (echo short | account_main add x1) >/dev/null 2>&1 && ! (echo tok-aaaaaaaaaaaaaaaaaaaaa | account_main add "Плохое Имя") >/dev/null 2>&1 && ! (echo tok-aaaaaaaaaaaaaaaaaaaaa | account_main add main) >/dev/null 2>&1'
 ok "account list: токены не показываются, видны main и second" 'l=$(account_main list); [[ $l == *main* && $l == *second* && $l != *tok-* ]]'
+ok "account list --tsv: одна строка на кабинет, поля через табуляцию, без токенов, по умолчанию помечен" 'l=$(account_main list --tsv); [[ $(wc -l <<<"$l") == 2 && $l != *tok-* ]] && grep -qP "^second\tok\t5000\tRUB\t1\t$" <<<"$l" && grep -qP "^main\tok\t5000\tRUB\t0\t$" <<<"$l"'
 ok "acct_token: main - из timeweb.env, second - из accounts" '[[ $(acct_token main) == tok-main-0000000000000000 && $(acct_token second) == tok-new-0000000000000000000 ]]'
 
 # -- выбор тарифа и образа
