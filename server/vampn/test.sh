@@ -796,7 +796,7 @@ ok "закрепление и сообщение об адресе сняты, �
 ok "адрес сервера возвращён из DHCP, конфиги пользователей пересобраны (письма не рассылаются)" "[[ \$(cat $BASE/endpoint) == 129.101.120.50 ]] && grep -q 'render ann' $CALLS && grep -q 'render bob' $CALLS && [[ \$out == 'ok 129.101.120.50' ]]"
 echo "== 14. ячейки: настройки, адреса туннеля, список пользователей ячейки"
 cd_=$T/cell; mkdir -p "$cd_/etc/cells" "$cd_/awg"
-printf 'CELL_NET=10.82.0\nCELL_NAME=vampn_2\nCELL_LIMIT=1000\n' > "$cd_/etc/cells/2.env"; : > "$cd_/awg/vampn2.conf"; : > "$cd_/awg/vampn.conf"
+printf 'CELL_NET=10.77.4\nCELL_NAME=vampn_2\nCELL_LIMIT=1000\n' > "$cd_/etc/cells/2.env"; : > "$cd_/awg/vampn2.conf"; : > "$cd_/awg/vampn.conf"
 hdr() { # переменные шапки скрипта при VAMPN_CELL=$1
   VAMPN_CELL=$1 VAMPN_ETC=$cd_/etc VAMPN_AWG_DIR=$cd_/awg VAMPN_CELLS_STATE=$cd_/st bash -c "
     FILE=$FILE; a=\$(grep -n '^set -uo pipefail' \$FILE | head -1 | cut -d: -f1); b=\$(grep -n '^now() ' \$FILE | head -1 | cut -d: -f1)
@@ -804,7 +804,7 @@ hdr() { # переменные шапки скрипта при VAMPN_CELL=$1
     sed -i 's|^STATE=/var/lib/vampn\$|STATE=$cd_/st1|' $cd_/hdr.sh
     . $cd_/hdr.sh; echo \"\$CELL \$TUN_IFACE \$SRV_TIP \$HOME_TIP \$STATE \$ROLE \$CELL_NAME\""; }
 ok "ячейка 1: прежние интерфейс, адреса и состояние" '[[ $(hdr 1) == "1 vampn 10.77.0.1 10.77.0.3 '$cd_'/st1 home vampn" ]]'
-ok "ячейка 2: свой интерфейс, адреса туннеля 10.82.0.x и своё состояние" '[[ $(hdr 2) == "2 vampn2 10.82.0.1 10.82.0.3 '$cd_'/st/2 home vampn_2" ]]'
+ok "ячейка 2: свой интерфейс, адреса туннеля 10.77.4.x и своё состояние" '[[ $(hdr 2) == "2 vampn2 10.77.4.1 10.77.4.3 '$cd_'/st/2 home vampn_2" ]]'
 ok "несуществующая ячейка 3 - отказ" '! hdr 3 >/dev/null 2>&1'
 ok "плохой номер ячейки - отказ" '! hdr 0 >/dev/null 2>&1 && ! hdr x >/dev/null 2>&1'
 printf '# список\nanna a@x.ru\nboris b@x.ru 2\nclara c@x.ru 1\ndima d@x.ru 3\n\nbad line here extra\n' > "$T/users_cells.conf"
@@ -824,10 +824,10 @@ printf 'IP=10.77.0.2\n' > "$CL/a.env"; printf 'IP=10.77.0.3\n' > "$CL/homeserv.e
 ok "/24: занятые пропускаются (.4)" '[[ $(next_ip) == 10.77.0.4 ]]'
 for i in $(seq 4 254); do echo "IP=10.77.0.$i" > "$CL/u$i.env"; done
 ok "/24 заполнена - отказ, как раньше" '! (next_ip) >/dev/null 2>&1'
-SUBNET=10.82.0; SUBNET_SPAN=4
-for i in $(seq 2 254); do echo "IP=10.82.0.$i" > "$CL/v$i.env"; done
-ok "/22: после заполнения первого /24 берёт 10.82.1.2" '[[ $(next_ip) == 10.82.1.2 ]]'
-for o in 1 2 3; do for i in $(seq 2 254); do echo "IP=10.82.$o.$i" > "$CL/w${o}_$i.env"; done; done
+SUBNET=10.77.4; SUBNET_SPAN=4
+for i in $(seq 2 254); do echo "IP=10.77.4.$i" > "$CL/v$i.env"; done
+ok "/22: после заполнения первого /24 берёт 10.77.5.2" '[[ $(next_ip) == 10.77.5.2 ]]'
+for o in 1 2 3; do for i in $(seq 2 254); do echo "IP=10.77.$((4+o)).$i" > "$CL/w${o}_$i.env"; done; done
 ok "/22 заполнена целиком (1012 адресов) - отказ" '! (next_ip) >/dev/null 2>&1'
 eval "$(sed -n '/^client_count() {/p' "$FILE")"
 ok "client_count не считает служебный homeserv" '[[ $(client_count) == $(( $(ls "$CL"/*.env | wc -l) - 1 )) ]]'
@@ -845,29 +845,29 @@ K1="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 K2="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB users-key"
 K3="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC mirror-key"
 K4="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD she@pc"
-inst() { FAKE_BIN=$R/bin bash "$INS" --render-only --root "$R/root" --payload "$R/pl" --net 10.82.0 --public-ip 203.0.113.7 \
+inst() { FAKE_BIN=$R/bin bash "$INS" --render-only --root "$R/root" --payload "$R/pl" --net 10.77.4 --public-ip 203.0.113.7 \
   --key-root "$K1" --key-users "$K2" --key-mirror "$K3" --admin-key "$K4" --home-public-ip 195.170.195.92 "$@" 2>&1; }
 out=$(inst)
 ok "install.sh: render-only отработал" '[[ $? == 0 && -f $R/root/etc/amnezia/amneziawg/awg0.conf ]]'
 AC=$R/root/etc/amnezia/amneziawg/awg0.conf; SE=$R/root/root/vampn/server.env; NF=$R/root/etc/nftables.conf; AK=$R/root/root/.ssh/authorized_keys
-ok "awg0.conf: адрес сервера 10.82.0.1/22, порт 30000-60999, ключ сервера" 'grep -q "^Address = 10.82.0.1/22" $AC && p=$(sed -n "s/^ListenPort = //p" $AC) && (( p >= 30000 && p <= 60999 )) && grep -q "^PrivateKey = " $AC'
-ok "server.env: сеть, /22, лимит клиентов и порт совпадают с awg0.conf" 'grep -q "^SUBNET=10.82.0$" $SE && grep -q "^SUBNET_SPAN=4$" $SE && grep -q "^SUBNET_CIDR=22$" $SE && grep -q "^CLIENT_LIMIT=1000$" $SE && [[ $(sed -n "s/^PORT=//p" $SE) == $(sed -n "s/^ListenPort = //p" $AC) ]]'
+ok "awg0.conf: адрес сервера 10.77.4.1/22, порт 30000-60999, ключ сервера" 'grep -q "^Address = 10.77.4.1/22" $AC && p=$(sed -n "s/^ListenPort = //p" $AC) && (( p >= 30000 && p <= 60999 )) && grep -q "^PrivateKey = " $AC'
+ok "server.env: сеть, /22, лимит клиентов и порт совпадают с awg0.conf" 'grep -q "^SUBNET=10.77.4$" $SE && grep -q "^SUBNET_SPAN=4$" $SE && grep -q "^SUBNET_CIDR=22$" $SE && grep -q "^CLIENT_LIMIT=1000$" $SE && [[ $(sed -n "s/^PORT=//p" $SE) == $(sed -n "s/^ListenPort = //p" $AC) ]]'
 ok "endpoint записан (публичный адрес нового сервера)" '[[ $(cat $R/root/root/vampn/endpoint) == 203.0.113.7 ]]'
 ok "параметры маскировки: S1+56 != S2, H-диапазоны не пересекаются" 's1=$(sed -n "s/^S1=//p" $SE); s2=$(sed -n "s/^S2=//p" $SE); (( s1 + 56 != s2 )) && h1=$(sed -n "s/^H1=//p" $SE | cut -d- -f2) && h2=$(sed -n "s/^H2=//p" $SE | cut -d- -f1) && (( h1 < h2 ))'
-ok "nftables: только порт VPN снаружи, ssh из туннеля с 10.82.0.3 и с публичного адреса homeserv" 'grep -q "iifname \$WAN udp dport \$AWG_PORT accept" $NF && grep -q "iifname \$VPN ip saddr 10.82.0.3 tcp dport 22 accept" $NF && grep -q "ip saddr 195.170.195.92 tcp dport 22 accept" $NF && ! grep -q "dport 22 accept$" <(grep -v saddr $NF)'
-ok "nftables: NAT подсети /22, игровые правила на 10.82.0.3" 'grep -q "ip saddr 10.82.0.0/22 oifname \$WAN masquerade" $NF && grep -q "ip daddr 10.82.0.3 tcp dport 25565" $NF'
+ok "nftables: только порт VPN снаружи, ssh из туннеля с 10.77.4.3 и с публичного адреса homeserv" 'grep -q "iifname \$WAN udp dport \$AWG_PORT accept" $NF && grep -q "iifname \$VPN ip saddr 10.77.4.3 tcp dport 22 accept" $NF && grep -q "ip saddr 195.170.195.92 tcp dport 22 accept" $NF && ! grep -q "dport 22 accept$" <(grep -v saddr $NF)'
+ok "nftables: NAT подсети /22, игровые правила на 10.77.4.3" 'grep -q "ip saddr 10.77.4.0/22 oifname \$WAN masquerade" $NF && grep -q "ip daddr 10.77.4.3 tcp dport 25565" $NF'
 ok "sysctl: ip_forward, bbr, ping закрыт" 'grep -q "ip_forward = 1" $R/root/etc/sysctl.d/90-vampn.conf && grep -q bbr $R/root/etc/sysctl.d/90-vampn.conf && grep -q icmp_echo_ignore_all $R/root/etc/sysctl.d/90-vampn.conf'
-ok "authorized_keys: ключ homeserv с ограничением from=10.82.0.3 для почты/копии, админ-ключ, обычный ключ root" 'grep -q "^restrict,from=\"10.82.0.3\",command=\"/usr/local/sbin/vampn remote\" ssh-ed25519 .* homeserv-users$" $AK && grep -q "command=\"tar -C /root/vampn -czf - server.env endpoint clients\" .* homeserv-mirror$" $AK && grep -q "^ssh-ed25519 .* vampn-admin$" $AK && grep -q "^ssh-ed25519 .* homeserv$" $AK'
+ok "authorized_keys: ключ homeserv с ограничением from=10.77.4.3 для почты/копии, админ-ключ, обычный ключ root" 'grep -q "^restrict,from=\"10.77.4.3\",command=\"/usr/local/sbin/vampn remote\" ssh-ed25519 .* homeserv-users$" $AK && grep -q "command=\"tar -C /root/vampn -czf - server.env endpoint clients\" .* homeserv-mirror$" $AK && grep -q "^ssh-ed25519 .* vampn-admin$" $AK && grep -q "^ssh-ed25519 .* homeserv$" $AK'
 ok "sshd: пароли выключены" 'grep -q "PasswordAuthentication no" $R/root/etc/ssh/sshd_config.d/00-vampn.conf'
-ok "юнит и таймер самопроверки, скрипт на месте" '[[ -x $R/root/usr/local/sbin/vampn ]] && grep -q "OnUnitActiveSec=60" $R/root/etc/systemd/system/vampn.timer && grep -q "RELAY_HOST=10.82.0.3" $R/root/etc/vampn/secrets.env'
+ok "юнит и таймер самопроверки, скрипт на месте" '[[ -x $R/root/usr/local/sbin/vampn ]] && grep -q "OnUnitActiveSec=60" $R/root/etc/systemd/system/vampn.timer && grep -q "RELAY_HOST=10.77.4.3" $R/root/etc/vampn/secrets.env'
 pk1=$(sed -n 's/^PrivateKey = //p' $AC); inst >/dev/null; pk2=$(sed -n 's/^PrivateKey = //p' $AC)
 ok "повторный запуск: ключ сервера не перезаписан (идемпотентность)" '[[ -n $pk1 && $pk1 == $pk2 ]]'
 ok "authorized_keys при повторе без дублей" '[[ $(grep -c homeserv-users $AK) == 1 && $(grep -c " homeserv$" $AK) == 1 ]]'
-ok "отказ: нет ключа homeserv" '! FAKE_BIN=$R/bin bash "$INS" --render-only --root $R/r2 --payload $R/pl --net 10.82.0 2>/dev/null'
-ok "отказ: третий октет сети не кратен 4 для /22" '! inst --net 10.82.2 >/dev/null 2>&1'
+ok "отказ: нет ключа homeserv" '! FAKE_BIN=$R/bin bash "$INS" --render-only --root $R/r2 --payload $R/pl --net 10.77.4 2>/dev/null'
+ok "отказ: третий октет сети не кратен 4 для /22" '! inst --net 10.77.6 >/dev/null 2>&1'
 ok "отказ: мусор вместо ключа" '! inst --admin-key "bash -c evil" >/dev/null 2>&1'
-rm -rf "$R/r3"; out=$(FAKE_BIN=$R/bin bash "$INS" --render-only --root "$R/r3" --payload "$R/pl" --net 10.83.0 --span 1 --public-ip 203.0.113.8 --key-root "$K1" --key-users "$K2" --key-mirror "$K3" --no-game 2>&1)
-ok "--span 1 --no-game: /24, без игровых правил, без правила публичного ssh" 'grep -q "^Address = 10.83.0.1/24" $R/r3/etc/amnezia/amneziawg/awg0.conf && ! grep -q 25565 $R/r3/etc/nftables.conf && ! grep -q "ip saddr 195" $R/r3/etc/nftables.conf'
+rm -rf "$R/r3"; out=$(FAKE_BIN=$R/bin bash "$INS" --render-only --root "$R/r3" --payload "$R/pl" --net 10.77.8 --span 1 --public-ip 203.0.113.8 --key-root "$K1" --key-users "$K2" --key-mirror "$K3" --no-game 2>&1)
+ok "--span 1 --no-game: /24, без игровых правил, без правила публичного ssh" 'grep -q "^Address = 10.77.8.1/24" $R/r3/etc/amnezia/amneziawg/awg0.conf && ! grep -q 25565 $R/r3/etc/nftables.conf && ! grep -q "ip saddr 195" $R/r3/etc/nftables.conf'
 if command -v nft >/dev/null 2>&1 && nft -c -f "$NF" >/dev/null 2>&1; then ok "nft принимает сгенерированный набор правил (nft -c)" 'true'; else echo "  --   nft -c недоступен в этом окружении, синтаксис правил не проверялся"; fi
 
 echo "== 17. пир homeserv на новом сервере: адрес .3, конфиг туннеля"
@@ -877,8 +877,8 @@ echo "== 17. пир homeserv на новом сервере: адрес .3, ко
   srv_home_init; srv_home_init
   echo "files=$(ls $CL | tr '\n' ' ')"; grep '^IP=' $CL/homeserv.env
   srv_home_conf | grep -E '^(Address|Endpoint|PublicKey)' ) > "$T/hh.out" 2>&1
-ok "homeserv: один пир с адресом 10.82.0.3, повторный вызов ничего не меняет" 'grep -q "files=homeserv.conf homeserv.env" $T/hh.out && grep -q "^IP=10.82.0.3$" $T/hh.out'
-ok "конфиг туннеля: адрес клиента .3, endpoint нового сервера, ключ сервера" 'grep -q "^Address = 10.82.0.3/32" $T/hh.out && grep -q "^Endpoint = 203.0.113.7:" $T/hh.out && grep -q "^PublicKey = PUB-" $T/hh.out'
+ok "homeserv: один пир с адресом 10.77.4.3, повторный вызов ничего не меняет" 'grep -q "files=homeserv.conf homeserv.env" $T/hh.out && grep -q "^IP=10.77.4.3$" $T/hh.out'
+ok "конфиг туннеля: адрес клиента .3, endpoint нового сервера, ключ сервера" 'grep -q "^Address = 10.77.4.3/32" $T/hh.out && grep -q "^Endpoint = 203.0.113.7:" $T/hh.out && grep -q "^PublicKey = PUB-" $T/hh.out'
 
 echo "== 18. ячейки и spawn: кабинеты, выбор тарифа, развёртывание на заглушках (в Timeweb и на серверы не ходит)"
 INSTALL_FILE=$(dirname "$(readlink -f "$FILE")")/install.sh
@@ -905,12 +905,12 @@ ssh() { local a="$*"; echo "ssh ${a: -60}" >> "$S/ssh.log"
   case $a in
     *install.sh*) cat > "$S/payload.tar"; [[ ${INSTALL_FAIL:-} == 1 ]] && { echo "E: boom"; return 1; }
        echo "[install] x"; echo VAMPN_PORT=41234; echo VAMPN_SERVER_PUBKEY=SRVPUB=; echo "VAMPN_MAILRELAY_PUB=ssh-ed25519 AAAARELAY"; [[ ${INSTALL_NOOK:-} == 1 ]] || echo VAMPN_INSTALL_OK=1 ;;
-    *home-conf*) printf '[Interface]\nPrivateKey = HK\nAddress = 10.82.0.3/32\nDNS = 1.1.1.1\nMTU = 1380\n\n[Peer]\nPublicKey = SRVPUB=\nPresharedKey = P\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 203.0.113.9:41234\nPersistentKeepalive = 25\n' ;;
+    *home-conf*) printf '[Interface]\nPrivateKey = HK\nAddress = 10.77.4.3/32\nDNS = 1.1.1.1\nMTU = 1380\n\n[Peer]\nPublicKey = SRVPUB=\nPresharedKey = P\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 203.0.113.9:41234\nPersistentKeepalive = 25\n' ;;
     *) return 0 ;;
   esac; }
 awg() { [[ $1 == show && ${HS_NONE:-} != 1 ]] && echo "PK $(( $(now) - 5 ))"; return 0; }
 systemctl() { echo "systemctl $*" >> "$CALLS"; return 0; }
-ssh-keyscan() { echo "10.82.0.1 ssh-ed25519 AAAAHOSTKEY"; }
+ssh-keyscan() { echo "10.77.4.1 ssh-ed25519 AAAAHOSTKEY"; }
 curl() { echo 195.170.195.92; }
 ssh-keygen() { [[ ${KEYGEN_FAIL:-} == 1 ]] && return 1; local f; while [[ $# -gt 0 ]]; do [[ $1 == -f ]] && f=$2; shift; done; echo FAKEPRIV > "$f"; echo "ssh-ed25519 AAAAFAKE vampn-spawn" > "$f.pub"; }
 printf '#!/bin/bash\necho "self $*" >> %s\n' "$CALLS" > "$T/fakeself2"; chmod +x "$T/fakeself2"
@@ -941,14 +941,14 @@ PRESETS='{"server_presets":[{"id":6803,"location":"nl-1","price":950},{"id":6801
 spawn_try main
 ok "spawn: готово, состояние done" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == done ]]'
 ok "spawn: сервер создан в Амстердаме, Debian 13, самый дешёвый тариф, имя vampn_2, ключ ssh" 'b=$(grep "^POST /servers " "$TWLOG" | sed "s/^POST \/servers //"); [[ $(jq -r .name <<<"$b") == vampn_2 && $(jq -r .preset_id <<<"$b") == 6801 && $(jq -r .os_id <<<"$b") == 109 && $(jq -r .availability_zone <<<"$b") == ams-1 && $(jq -c .ssh_keys_ids <<<"$b") == "[55]" ]]'
-ok "spawn: ячейка 2 записана (имя, сеть 10.82.0, лимит 1000, кабинет, id сервера, IP, состояние)" '( . "$CELLS_DIR/2.env"; [[ $CELL_NAME == vampn_2 && $CELL_NET == 10.82.0 && $CELL_LIMIT == 1000 && $CELL_ACCOUNT == main && $CELL_SERVER_ID == 777 && $CELL_IP == 203.0.113.9 && $CELL_STATE == активна ]] )'
+ok "spawn: ячейка 2 записана (имя, сеть 10.77.4, лимит 1000, кабинет, id сервера, IP, состояние)" '( . "$CELLS_DIR/2.env"; [[ $CELL_NAME == vampn_2 && $CELL_NET == 10.77.4 && $CELL_LIMIT == 1000 && $CELL_ACCOUNT == main && $CELL_SERVER_ID == 777 && $CELL_IP == 203.0.113.9 && $CELL_STATE == активна ]] )'
 ok "spawn: токен кабинета лежит в 2.timeweb.env с правами 600" '[[ $(stat -c %a $CELLS_DIR/2.timeweb.env) == 600 ]] && grep -q "^TIMEWEB_SERVER_ID=777$" $CELLS_DIR/2.timeweb.env && grep -q "^TIMEWEB_TOKEN=tok-main" $CELLS_DIR/2.timeweb.env'
-ok "spawn: конфиг туннеля: адрес сервера /32 вместо 0.0.0.0/0, без DNS, правильный Endpoint, права 600" 'c=$AWG_DIR/vampn2.conf; grep -q "^AllowedIPs = 10.82.0.1/32$" $c && ! grep -q "^DNS" $c && grep -q "^Endpoint = 203.0.113.9:41234$" $c && [[ $(stat -c %a $c) == 600 ]]'
-ok "spawn: ключ почты сервера внесён на homeserv с ограничением (restrict, from=10.82.0.1, только vampn mail)" 'grep -q "^restrict,from=\"10.82.0.1\",command=\"/usr/local/sbin/vampn mail\" ssh-ed25519 AAAARELAY vampn-mailrelay-2$" "$HOME_AK"'
-ok "spawn: отпечаток sshd запомнен для ячейки" 'grep -q "^10.82.0.1 ssh-ed25519 AAAAHOSTKEY$" "$CELLS_DIR/2.known_hosts"'
+ok "spawn: конфиг туннеля: адрес сервера /32 вместо 0.0.0.0/0, без DNS, правильный Endpoint, права 600" 'c=$AWG_DIR/vampn2.conf; grep -q "^AllowedIPs = 10.77.4.1/32$" $c && ! grep -q "^DNS" $c && grep -q "^Endpoint = 203.0.113.9:41234$" $c && [[ $(stat -c %a $c) == 600 ]]'
+ok "spawn: ключ почты сервера внесён на homeserv с ограничением (restrict, from=10.77.4.1, только vampn mail)" 'grep -q "^restrict,from=\"10.77.4.1\",command=\"/usr/local/sbin/vampn mail\" ssh-ed25519 AAAARELAY vampn-mailrelay-2$" "$HOME_AK"'
+ok "spawn: отпечаток sshd запомнен для ячейки" 'grep -q "^10.77.4.1 ssh-ed25519 AAAAHOSTKEY$" "$CELLS_DIR/2.known_hosts"'
 ok "spawn: туннель и таймер сторожа ячейки включены, юниты записаны" 'grep -q "systemctl enable --now awg-quick@vampn2" $CALLS && grep -q "systemctl enable --now vampn-cell@2.timer" $CALLS && grep -q "VAMPN_CELL=%i" $VAMPN_UNITS/vampn-cell@.service'
 ok "spawn: пользователи ячейки отправлены и копия данных снята" 'grep -q "^self users" $CALLS && grep -q "^self mirror" $CALLS'
-ok "spawn: бандл ушёл на сервер (vampn, install.sh, amnezia.gpg, secrets без пароля SMTP)" 'tar -tf $S/payload.tar | grep -q "^./install.sh" && tar -tf $S/payload.tar | grep -q "^./amnezia.gpg" && tar -xOf $S/payload.tar ./secrets.env | grep -q "RELAY_HOST=10.82.0.3" && ! tar -xOf $S/payload.tar ./secrets.env | grep -q SMTP_PASS'
+ok "spawn: бандл ушёл на сервер (vampn, install.sh, amnezia.gpg, secrets без пароля SMTP)" 'tar -tf $S/payload.tar | grep -q "^./install.sh" && tar -tf $S/payload.tar | grep -q "^./amnezia.gpg" && tar -xOf $S/payload.tar ./secrets.env | grep -q "RELAY_HOST=10.77.4.3" && ! tar -xOf $S/payload.tar ./secrets.env | grep -q SMTP_PASS'
 ok "spawn: ключ spawn.key создан и его открытая часть отправлена в Timeweb" '[[ -f $ETC_DIR/spawn.key && $(grep -c "" $ETC_DIR/spawn.key.pub) == 1 ]] && grep -q "^POST /ssh-keys .*ssh-ed25519 AAAAFAKE" "$TWLOG"'
 ok "cells: ячейка 2 в таблице с IP и состоянием" 't=$(cells_main); grep -q "^2.vampn_2.203.0.113.9.0.1000" <<<"$t" || grep -qP "^2\tvampn_2\t203.0.113.9\t0\t1000\t" <<<"$t"'
 
@@ -956,7 +956,7 @@ ok "cells: ячейка 2 в таблице с IP и состоянием" 't=$(
 TW_SERVERS='{"servers":[{"id":5,"name":"vampn_2"}]}'; TW_CREATE='{"server":{"id":777}}'
 mkdir -p "$S/keep"; cp "$CELLS_DIR/2.env" "$S/keep/2.env"
 spawn_try second
-ok "spawn: следующая ячейка получает номер 3 (vampn_3, сеть 10.83.0), кабинет по умолчанию second" '( . "$CELLS_DIR/3.env"; [[ $CELL_NAME == vampn_3 && $CELL_NET == 10.83.0 && $CELL_ACCOUNT == second ]] ) && grep -q "vampn-mailrelay-3" "$HOME_AK"'
+ok "spawn: следующая ячейка получает номер 3 (vampn_3, сеть 10.77.8), кабинет по умолчанию second" '( . "$CELLS_DIR/3.env"; [[ $CELL_NAME == vampn_3 && $CELL_NET == 10.77.8 && $CELL_ACCOUNT == second ]] ) && grep -q "vampn-mailrelay-3" "$HOME_AK"'
 
 # -- сбои
 rm -f "$ETC_DIR/spawn.key" "$ETC_DIR/spawn.key.pub"; KEYGEN_FAIL=1; spawn_try main
