@@ -1161,6 +1161,12 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\n' 1000 f f@x.ru key fail "SMTP: отказ" >> "
 m_out=$(mailstatus 2>&1); m_rc=$?
 ok "mailstatus: пользователь ячейки 2 читается из журнала ячейки 2 и показан с номером ячейки" '[[ $m_rc == 1 && $m_out =~ f[[:space:]]+2[[:space:]]+f@x.ru && $m_out == *"НЕ УШЛО: SMTP: отказ"* && $m_out =~ a[[:space:]]+1[[:space:]]+a@x.ru ]]'
 unset VAMPN_CELLS_STATE
+# -- resend/reissue с homeserv: успех команды на сервере - код 0 (раньше resend возвращал 1 после «sent»)
+( eval "$(sed -n '/^home_remote()/,/^}/p' "$FILE")"
+  remote() { echo "remote $1" >> "$MC/calls"; return "${REMOTE_RC:-0}"; }; pull_mirror() { echo pull >> "$MC/calls"; }; key_local() { return 1; }
+  : > "$MC/calls"; home_remote resend a; r1=$?; home_remote reissue a; r2=$?; REMOTE_RC=1 home_remote resend a >/dev/null 2>&1; r3=$?
+  echo "$r1 $r2 $r3 $(grep -c pull "$MC/calls")" > "$MC/hr" )
+ok "home_remote: resend и reissue при успехе дают код 0, при ошибке сервера - ошибку; mirror после reissue" '[[ $(cat $MC/hr) == "0 0 1 1" ]]'
 rm -f "$CELLS_DIR"/[234].env
 
 unset -f twa ssh awg systemctl ssh-keyscan curl ssh-keygen

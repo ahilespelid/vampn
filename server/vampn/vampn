@@ -38,6 +38,7 @@
 #   vampn adopt IP [--hours Ч] [--no-rescue]
 #                         (homeserv) сервер, поднятый командой vampn init, становится ячейкой, а всех «отвалившихся» из ВСЕХ ячеек
 #                         (нет рукопожатия дольше Ч часов, по умолчанию 1, или ячейка не отвечает) переносит в неё и рассылает им новые ключи
+#   vampn move ИМЯ [ИМЯ ...] N   принудительно перенести пользователей в ячейку N: там им выпускается новый ключ (на почту), старый перестаёт работать
 #   vampn rescue N [--hours Ч] [--dry]   то же самое переносом в уже существующую ячейку N; --dry - только показать, кого перенесёт
 #   vampn installscript   установочный бандл для чистого Debian (install.sh)
 #   VAMPN_CELL=N vampn ... любая команда homeserv для ячейки N (status, rotate, users, mirror, resendall ...)
@@ -2093,6 +2094,48 @@ rescue_main() { # N [--hours Ч] [--dry] - всех «отвалившихся»
   echo "новые ключи уходят на почту; кому не дошло - vampn mailstatus, повторить - vampn resendall"
 }
 
+move_main() { # ИМЯ [ИМЯ ...] N - принудительно перенести пользователей в ячейку N: там они получают новые ключи (на почту), старые перестают работать
+  (( CELL == 1 )) || die "move запускается без VAMPN_CELL"
+  (( $# >= 2 )) || die "vampn move ИМЯ [ИМЯ ...] N  (N - номер ячейки, куда переносим; vampn cells)"
+  local n=${!#} u cc lim cur cnt=0 names=" " touched=" " out c tmp bak
+  local -a list=("${@:1:$#-1}")
+  local USERS=${VAMPN_USERS:-/etc/vampn/users.conf}
+  [[ $n =~ ^[0-9]+$ ]] || die "vampn move ИМЯ [ИМЯ ...] N  (последним - номер ячейки)"
+  [[ " $(cell_ids | tr '\n' ' ') " == *" $n "* ]] || die "нет ячейки $n (vampn cells)"
+  [[ $n == 1 || $(cell_field "$n" CELL_STATE) == активна ]] || die "ячейка $n не активна ($(cell_field "$n" CELL_STATE)): переносить туда рано (vampn cells)"
+  [[ -f $USERS ]] || die "нет $USERS"
+  for u in "${list[@]}"; do
+    [[ $u =~ ^[a-zA-Z0-9_.-]{1,32}$ ]] || die "плохое имя «$u»"
+    [[ $names == *" $u "* ]] && continue
+    cc=$(cell_of_user "$u")
+    [[ -n $cc ]] || die "$u нет в $USERS: так можно переносить только тех, кто в списке (заведённых прямо на сервере, как client1, - нельзя)"
+    if [[ $cc == "$n" ]]; then echo "$u: уже в ячейке $n"; continue; fi
+    names+="$u "; cnt=$(( cnt + 1 )); [[ $touched == *" $cc "* ]] || touched+="$cc "
+    echo "$u: ячейка $cc -> $n"
+  done
+  (( cnt > 0 )) || { echo "переносить некого"; return 0; }
+  lim=$(cell_field "$n" CELL_LIMIT); cur=$(cell_users "$n")
+  (( cur + cnt <= ${lim:-1000} )) || die "в ячейке $n не хватит места: уже $cur, переносим $cnt, лимит ${lim:-1000}"
+  bak="$USERS.bak.$(date +%Y%m%d%H%M%S)"; cp -p "$USERS" "$bak"
+  tmp=$(mktemp)
+  sed 's/\r$//' "$USERS" | awk -v moved="$names" -v c="$n" '
+    /^[[:space:]]*#/ || NF == 0 { print; next }
+    index(moved, " " $1 " ") { print $1, $2, c; next }
+    { print }' > "$tmp"
+  cat "$tmp" > "$USERS"; rm -f "$tmp"
+  # сначала новая ячейка (пользователь появляется и получает ключ), потом старые (оттуда он убирается)
+  if ! out=$(VAMPN_CELL=$n "$SELF" users 2>&1 </dev/null); then
+    cat "$bak" > "$USERS"
+    die "ячейка $n не приняла список ($(tail -c 200 <<<"$out" | tr '\n' ' ')): ничего не изменено, users.conf возвращён"
+  fi
+  echo "ячейка $n: список применён, новые ключи уходят на почту"
+  for c in $touched; do
+    out=$(VAMPN_CELL=$c "$SELF" users 2>&1 </dev/null) && echo "ячейка $c: пользователи убраны" \
+      || echo "ячейка $c: убрать сейчас не вышло ($(tail -c 150 <<<"$out" | tr '\n' ' ')), уберётся сама, когда сервер ответит; старый ключ пока работает"
+  done
+  echo "перенесено: $cnt. Копия списка: $bak. Кому не дошло письмо - vampn mailstatus"
+}
+
 adopt_main() { # IP [--hours Ч] [--no-rescue] - сервер, поднятый командой vampn init, становится ячейкой; отвалившиеся из всех ячеек переезжают в неё
   (( CELL == 1 )) || die "adopt запускается без VAMPN_CELL"
   local ip=${1:-} hours=1 key out
@@ -2692,6 +2735,7 @@ home_main() {
     spawn)      spawn_main "${2:-}"; return ;;
     adopt)      shift; adopt_main "$@"; return ;;
     rescue)     shift; rescue_main "$@"; return ;;
+    move)       shift; move_main "$@"; return ;;
     spawnrun)     if [[ -n ${SPAWN_RESUME:-}${SPAWN_ADOPT:-} ]]; then spawn_run "${2:?кабинет}"; else spawn_loop "${2:?кабинет}"; fi; return ;;
     spawnresume) spawn_resume_main "${2:-}"; return ;;
     spawnstatus) spawn_status "${2:-}"; return ;;
