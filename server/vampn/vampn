@@ -2752,8 +2752,8 @@ home_remote() {
             key_local link "$2" || remote "link $2" ;;
     reissue|resend)
       [[ ${2:-} =~ ^[a-zA-Z0-9_.-]{1,32}$ ]] || die "нужно имя пользователя: vampn $cmd ИМЯ"
-      remote "$cmd $2"
-      [[ $cmd == reissue ]] && { pull_mirror >/dev/null 2>&1 || true; } ;;
+      remote "$cmd $2" || return $?
+      if [[ $cmd == reissue ]]; then pull_mirror >/dev/null 2>&1 || true; fi ;;
     *) echo "vampn: неизвестная команда «$cmd»" >&2; usage 1 ;;
   esac
 }
