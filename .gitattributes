@@ -1,0 +1,4 @@
+# скрипты сервера запускаются на Linux: всегда LF, иначе install.sh и vampn ломаются при выгрузке на Windows
+server/vampn/vampn text eol=lf
+server/vampn/*.sh text eol=lf
+server/vampn/*.py text eol=lf

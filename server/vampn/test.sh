@@ -880,6 +880,109 @@ echo "== 17. пир homeserv на новом сервере: адрес .3, ко
 ok "homeserv: один пир с адресом 10.82.0.3, повторный вызов ничего не меняет" 'grep -q "files=homeserv.conf homeserv.env" $T/hh.out && grep -q "^IP=10.82.0.3$" $T/hh.out'
 ok "конфиг туннеля: адрес клиента .3, endpoint нового сервера, ключ сервера" 'grep -q "^Address = 10.82.0.3/32" $T/hh.out && grep -q "^Endpoint = 203.0.113.7:" $T/hh.out && grep -q "^PublicKey = PUB-" $T/hh.out'
 
+echo "== 18. ячейки и spawn: кабинеты, выбор тарифа, развёртывание на заглушках (в Timeweb и на серверы не ходит)"
+INSTALL_FILE=$(dirname "$(readlink -f "$FILE")")/install.sh
+ok "встроенный в vampn install.sh совпадает с install.sh (если нет - bash embed.sh)" '[[ $(install_sh | sha256sum) == $(sha256sum < "$INSTALL_FILE") ]]'
+S=$T/sp; rm -rf "$S"; mkdir -p "$S/etc" "$S/awg" "$S/units" "$S/spawn"
+ETC_DIR=$S/etc CELLS_DIR=$S/etc/cells ACCT_DIR=$S/etc/accounts SPAWN_DIR=$S/spawn AWG_DIR=$S/awg HOME_AK=$S/ak VAMPN_KEYRING=$S/gpg VAMPN_UNITS=$S/units VAMPN_USERS=$S/users.conf
+: > "$S/ak"; echo gpgdata > "$S/gpg"; echo "ssh-ed25519 AAAAUSERS users" > "$S/etc/users.key.pub"; echo "ssh-ed25519 AAAAMIRROR mirror" > "$S/etc/mirror.key.pub"
+printf '# k\nMAIL_FROM=vpn@x.ru\nSMTP_PASS=secret\n' > "$S/etc/secrets.env"
+printf 'TIMEWEB_TOKEN=tok-main-0000000000000000\nTIMEWEB_SERVER_ID=1\n' > "$S/etc/timeweb.env"
+PRESETS='{"server_presets":[{"id":1,"location":"ru-4","price":350},{"id":6803,"location":"nl-1","price":950},{"id":6810,"location":"nl-1","price":1500},{"id":6801,"location":"nl-1","price":950},{"id":2,"location":"pl-1","price":600}]}'
+OSES='{"servers_os":[{"id":67,"name":"debian","version":"11"},{"id":95,"name":"debian","version":"12"},{"id":109,"name":"debian","version":"13"},{"id":5,"name":"ubuntu","version":"24.04"}]}'
+TWLOG=$S/tw.log; : > "$TWLOG"; TW_SERVERS='{"servers":[]}'; TW_CREATE='{"server":{"id":777}}'; TW_TOKEN_OK=1; TW_ON=on
+twa() { echo "$2 $3 $(tr -d '\n' <<<"${4:-}")" >> "$TWLOG"
+  case "$2 $3" in
+    "GET /account/finances") [[ $TW_TOKEN_OK == 1 && $1 == tok-* ]] && echo '{"finances":{"balance":5000,"currency":"RUB"}}' || echo '{"message":"Unauthorized"}' ;;
+    "GET /presets/servers") echo "$PRESETS" ;;   "GET /os/servers") echo "$OSES" ;;
+    "GET /servers") echo "$TW_SERVERS" ;;           "GET /ssh-keys") echo '{"ssh_keys":[]}' ;;
+    "POST /ssh-keys") echo '{"ssh_key":{"id":55}}' ;; "POST /servers") echo "$TW_CREATE" ;;
+    "GET /servers/777") echo "{\"server\":{\"id\":777,\"status\":\"$TW_ON\",\"networks\":[{\"ips\":[{\"ip\":\"2a03::1\",\"type\":\"ipv6\",\"is_main\":true},{\"ip\":\"203.0.113.9\",\"type\":\"ipv4\",\"is_main\":true}]}]}}" ;;
+    "DELETE /servers/777") echo '{"message":"ok"}' ;;
+    *) echo '{"message":"unexpected"}' ;;
+  esac; }
+ssh() { local a="$*"; echo "ssh ${a: -60}" >> "$S/ssh.log"
+  case $a in
+    *install.sh*) cat > "$S/payload.tar"; [[ ${INSTALL_FAIL:-} == 1 ]] && { echo "E: boom"; return 1; }
+       echo "[install] x"; echo VAMPN_PORT=41234; echo VAMPN_SERVER_PUBKEY=SRVPUB=; echo "VAMPN_MAILRELAY_PUB=ssh-ed25519 AAAARELAY"; [[ ${INSTALL_NOOK:-} == 1 ]] || echo VAMPN_INSTALL_OK=1 ;;
+    *home-conf*) printf '[Interface]\nPrivateKey = HK\nAddress = 10.82.0.3/32\nDNS = 1.1.1.1\nMTU = 1380\n\n[Peer]\nPublicKey = SRVPUB=\nPresharedKey = P\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 203.0.113.9:41234\nPersistentKeepalive = 25\n' ;;
+    *) return 0 ;;
+  esac; }
+awg() { [[ $1 == show && ${HS_NONE:-} != 1 ]] && echo "PK $(( $(now) - 5 ))"; return 0; }
+systemctl() { echo "systemctl $*" >> "$CALLS"; return 0; }
+ssh-keyscan() { echo "10.82.0.1 ssh-ed25519 AAAAHOSTKEY"; }
+curl() { echo 195.170.195.92; }
+ssh-keygen() { [[ ${KEYGEN_FAIL:-} == 1 ]] && return 1; local f; while [[ $# -gt 0 ]]; do [[ $1 == -f ]] && f=$2; shift; done; echo FAKEPRIV > "$f"; echo "ssh-ed25519 AAAAFAKE vampn-spawn" > "$f.pub"; }
+printf '#!/bin/bash\necho "self $*" >> %s\n' "$CALLS" > "$T/fakeself2"; chmod +x "$T/fakeself2"
+spawn_try() { : > "$CALLS"; : > "$TWLOG"; rm -rf "$S/spawn"; mkdir -p "$S/spawn"; ( SELF=$T/fakeself2 spawn_run "${1:-main}" ) >/dev/null 2>&1; }
+
+# -- кабинеты
+acc_out=$( printf 'tok-new-0000000000000000000\n' | account_main add second 2>&1 ); acc_rc=$?
+ok "account add: токен принят, файл 600, в выводе токена нет" '[[ $acc_rc == 0 && -f $ACCT_DIR/second.env && $(stat -c %a $ACCT_DIR/second.env) == 600 && $acc_out != *tok-new* && $acc_out == *5000* ]]'
+ok "account add: первый добавленный становится кабинетом по умолчанию" '[[ $(cat $ACCT_DIR/default) == second && $(acct_default) == second ]]'
+TW_TOKEN_OK=0; ok "account add: Timeweb не принял токен - файл не создан" '! (printf "tok-bad-000000000000000000\n" | account_main add bad) >/dev/null 2>&1 && [[ ! -f $ACCT_DIR/bad.env ]]'; TW_TOKEN_OK=1
+ok "account add: мусор вместо токена и плохое имя отклоняются" '! (echo short | account_main add x1) >/dev/null 2>&1 && ! (echo tok-aaaaaaaaaaaaaaaaaaaaa | account_main add "Плохое Имя") >/dev/null 2>&1 && ! (echo tok-aaaaaaaaaaaaaaaaaaaaa | account_main add main) >/dev/null 2>&1'
+ok "account list: токены не показываются, видны main и second" 'l=$(account_main list); [[ $l == *main* && $l == *second* && $l != *tok-* ]]'
+ok "acct_token: main - из timeweb.env, second - из accounts" '[[ $(acct_token main) == tok-main-0000000000000000 && $(acct_token second) == tok-new-0000000000000000000 ]]'
+
+# -- выбор тарифа и образа
+ok "spawn_pick: самый дешёвый тариф локации nl-1 (при равной цене меньший id) и Debian 13" '[[ $(spawn_pick tok-x) == "6801 109" ]]'
+OSES='{"servers_os":[{"id":95,"name":"debian","version":"12"},{"id":67,"name":"debian","version":"11"},{"id":5,"name":"ubuntu","version":"24.04"}]}'
+ok "spawn_pick: Debian 13 нет - берёт 12 (11 и Ubuntu не берёт)" '[[ $(spawn_pick tok-x) == "6801 95" ]]'
+OSES='{"servers_os":[{"id":5,"name":"ubuntu","version":"24.04"}]}'
+ok "spawn_pick: нет Debian - отказ" '! spawn_pick tok-x >/dev/null 2>&1'
+OSES='{"servers_os":[{"id":109,"name":"debian","version":"13"}]}'; PRESETS='{"server_presets":[{"id":1,"location":"ru-4","price":350}]}'
+ok "spawn_pick: в Амстердаме нет тарифов - отказ" '! spawn_pick tok-x >/dev/null 2>&1'
+PRESETS='{"server_presets":[{"id":6803,"location":"nl-1","price":950},{"id":6801,"location":"nl-1","price":950},{"id":6810,"location":"nl-1","price":1500},{"id":1,"location":"ru-4","price":350}]}'
+
+# -- полный ход
+spawn_try main
+ok "spawn: готово, состояние done" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == done ]]'
+ok "spawn: сервер создан в Амстердаме, Debian 13, самый дешёвый тариф, имя vampn_2, ключ ssh" 'b=$(grep "^POST /servers " "$TWLOG" | sed "s/^POST \/servers //"); [[ $(jq -r .name <<<"$b") == vampn_2 && $(jq -r .preset_id <<<"$b") == 6801 && $(jq -r .os_id <<<"$b") == 109 && $(jq -r .availability_zone <<<"$b") == ams-1 && $(jq -c .ssh_keys_ids <<<"$b") == "[55]" ]]'
+ok "spawn: ячейка 2 записана (имя, сеть 10.82.0, лимит 1000, кабинет, id сервера, IP, состояние)" '( . "$CELLS_DIR/2.env"; [[ $CELL_NAME == vampn_2 && $CELL_NET == 10.82.0 && $CELL_LIMIT == 1000 && $CELL_ACCOUNT == main && $CELL_SERVER_ID == 777 && $CELL_IP == 203.0.113.9 && $CELL_STATE == активна ]] )'
+ok "spawn: токен кабинета лежит в 2.timeweb.env с правами 600" '[[ $(stat -c %a $CELLS_DIR/2.timeweb.env) == 600 ]] && grep -q "^TIMEWEB_SERVER_ID=777$" $CELLS_DIR/2.timeweb.env && grep -q "^TIMEWEB_TOKEN=tok-main" $CELLS_DIR/2.timeweb.env'
+ok "spawn: конфиг туннеля: адрес сервера /32 вместо 0.0.0.0/0, без DNS, правильный Endpoint, права 600" 'c=$AWG_DIR/vampn2.conf; grep -q "^AllowedIPs = 10.82.0.1/32$" $c && ! grep -q "^DNS" $c && grep -q "^Endpoint = 203.0.113.9:41234$" $c && [[ $(stat -c %a $c) == 600 ]]'
+ok "spawn: ключ почты сервера внесён на homeserv с ограничением (restrict, from=10.82.0.1, только vampn mail)" 'grep -q "^restrict,from=\"10.82.0.1\",command=\"/usr/local/sbin/vampn mail\" ssh-ed25519 AAAARELAY vampn-mailrelay-2$" "$HOME_AK"'
+ok "spawn: отпечаток sshd запомнен для ячейки" 'grep -q "^10.82.0.1 ssh-ed25519 AAAAHOSTKEY$" "$CELLS_DIR/2.known_hosts"'
+ok "spawn: туннель и таймер сторожа ячейки включены, юниты записаны" 'grep -q "systemctl enable --now awg-quick@vampn2" $CALLS && grep -q "systemctl enable --now vampn-cell@2.timer" $CALLS && grep -q "VAMPN_CELL=%i" $VAMPN_UNITS/vampn-cell@.service'
+ok "spawn: пользователи ячейки отправлены и копия данных снята" 'grep -q "^self users" $CALLS && grep -q "^self mirror" $CALLS'
+ok "spawn: бандл ушёл на сервер (vampn, install.sh, amnezia.gpg, secrets без пароля SMTP)" 'tar -tf $S/payload.tar | grep -q "^./install.sh" && tar -tf $S/payload.tar | grep -q "^./amnezia.gpg" && tar -xOf $S/payload.tar ./secrets.env | grep -q "RELAY_HOST=10.82.0.3" && ! tar -xOf $S/payload.tar ./secrets.env | grep -q SMTP_PASS'
+ok "spawn: ключ spawn.key создан и его открытая часть отправлена в Timeweb" '[[ -f $ETC_DIR/spawn.key && $(grep -c "" $ETC_DIR/spawn.key.pub) == 1 ]] && grep -q "^POST /ssh-keys .*ssh-ed25519 AAAAFAKE" "$TWLOG"'
+ok "cells: ячейка 2 в таблице с IP и состоянием" 't=$(cells_main); grep -q "^2.vampn_2.203.0.113.9.0.1000" <<<"$t" || grep -qP "^2\tvampn_2\t203.0.113.9\t0\t1000\t" <<<"$t"'
+
+# -- вторая аренда: имя vampn_2 занято в Timeweb и ячейка 2 есть -> vampn_3
+TW_SERVERS='{"servers":[{"id":5,"name":"vampn_2"}]}'; TW_CREATE='{"server":{"id":777}}'
+mkdir -p "$S/keep"; cp "$CELLS_DIR/2.env" "$S/keep/2.env"
+spawn_try second
+ok "spawn: следующая ячейка получает номер 3 (vampn_3, сеть 10.83.0), кабинет по умолчанию second" '( . "$CELLS_DIR/3.env"; [[ $CELL_NAME == vampn_3 && $CELL_NET == 10.83.0 && $CELL_ACCOUNT == second ]] ) && grep -q "vampn-mailrelay-3" "$HOME_AK"'
+
+# -- сбои
+rm -f "$ETC_DIR/spawn.key" "$ETC_DIR/spawn.key.pub"; KEYGEN_FAIL=1; spawn_try main
+ok "ssh-keygen не сработал - spawn останавливается до аренды (POST /servers не было)" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]] && ! grep -q "^POST /servers" "$TWLOG"'; unset KEYGEN_FAIL
+rm -f "$CELLS_DIR"/3.* "$AWG_DIR"/vampn3.conf; TW_SERVERS='{"servers":[]}'
+TW_CREATE='{"message":"Not enough funds","error_code":"payment_required"}'; spawn_try main
+ok "сбой создания сервера: состояние failed, ячейка не создана, есть тревога" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed && ! -f $CELLS_DIR/4.env ]] && grep -q "^tg notify alerts" $CALLS'
+TW_CREATE='{"server":{"id":777}}'; INSTALL_FAIL=1; spawn_try main
+ok "сбой install.sh: ячейка помечена «ошибка», сервер и запись остаются для разбора" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]] && ( . "$CELLS_DIR/3.env"; [[ $CELL_STATE == ошибка ]] ) && ! grep -q "enable --now vampn-cell@3" $CALLS'
+INSTALL_FAIL=0; INSTALL_NOOK=1; rm -f "$CELLS_DIR"/3.*; spawn_try main
+ok "install.sh без подтверждения VAMPN_INSTALL_OK - сбой" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]]'
+INSTALL_NOOK=0; HS_NONE=1; rm -f "$CELLS_DIR"/3.*; spawn_try main
+ok "нет рукопожатия с новым сервером - сбой, таймер ячейки не включён" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]] && ! grep -q "enable --now vampn-cell@" $CALLS'
+HS_NONE=0; rm -f "$CELLS_DIR"/3.*
+( exec 7>"$SPAWN_DIR/lock"; flock -n 7; ( spawn_run main >/dev/null 2>&1 ); echo $? > "$S/rc_lock" ); 
+ok "два spawn одновременно нельзя (занят замок)" '[[ $(cat $S/rc_lock) != 0 ]]'
+unset INSTALL_FAIL INSTALL_NOOK HS_NONE
+
+# -- удаление
+printf 'a a@x.ru 2\n' > "$S/users.conf"; cp "$S/keep/2.env" "$CELLS_DIR/2.env"
+ok "cell-del: без --yes отказ" '! (cell_del 2) >/dev/null 2>&1 && [[ -f $CELLS_DIR/2.env ]]'
+ok "cell-del: в ячейке есть пользователи - отказ без --force" '! (cell_del 2 --yes) >/dev/null 2>&1 && [[ -f $CELLS_DIR/2.env ]]'
+ok "cell-del: ячейку 1 удалить нельзя" '! (cell_del 1 --yes) >/dev/null 2>&1'
+printf 'a a@x.ru\n' > "$S/users.conf"; : > "$TWLOG"
+ok "cell-del: пустую ячейку убирает и просит Timeweb удалить сервер" 'cell_del 2 --yes >/dev/null 2>&1 && [[ ! -f $CELLS_DIR/2.env && ! -f $AWG_DIR/vampn2.conf ]] && grep -q "^DELETE /servers/777" "$TWLOG"'
+ok "cell_users: считает по третьему столбцу, без номера - ячейка 1" 'printf "a a@x.ru\nb b@x.ru 2\nc c@x.ru 2\n" > $S/users.conf; [[ $(cell_users 1) == 1 && $(cell_users 2) == 2 && $(cell_users 3) == 0 ]]'
+unset -f twa ssh awg systemctl ssh-keyscan curl ssh-keygen
+
 echo; echo "итого: $pass прошло, $failn не прошло"
 rm -rf "$T"
 [[ $failn == 0 ]]
