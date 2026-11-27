@@ -1875,7 +1875,7 @@ spawn_run() { # КАБИНЕТ - сама аренда и развёртыван
     (( third >= 4 && third <= 252 && third % 4 == 0 )) || sp_fail "сеть $sub.0/22 не подходит для ячейки (нужна 10.77.4, 10.77.8, ...): на сервере vampn init --net 10.77.8"
     n=$(( third / 4 + 1 )); net=$sub
     if [[ -f $CELLS_DIR/$n.env ]]; then
-      grep -qx 'CELL_ADOPTED=1' "$CELLS_DIR/$n.env" && grep -qx 'CELL_STATE=ошибка' "$CELLS_DIR/$n.env" \
+      grep -qx 'CELL_ADOPTED=1' "$CELLS_DIR/$n.env" && ! grep -qx 'CELL_STATE=активна' "$CELLS_DIR/$n.env" \
         || sp_fail "ячейка $n уже есть (сеть $net.0/22 занята): на новом сервере vampn init --net 10.77.$(( 4 * (n) )) и снова vampn adopt"
     fi
     SPAWN_CELL=$n
@@ -1997,10 +1997,14 @@ spawn_run() { # КАБИНЕТ - сама аренда и развёртыван
 
   sp_step "туннель homeserv - $name"
   systemctl enable --now "awg-quick@vampn$n" >/dev/null 2>&1 || sp_fail "туннель vampn$n не поднялся"
-  for (( i = 0; i < 24; i++ )); do
-    st=$(awg show "vampn$n" latest-handshakes 2>/dev/null | awk '{print $2; exit}'); [[ $st =~ ^[0-9]+$ && $st -gt 0 ]] && break; sleep 5
+  for (( i = 0; i < 36; i++ )); do
+    st=$(awg show "vampn$n" latest-handshakes 2>/dev/null | awk '{print $2; exit}'); [[ $st =~ ^[0-9]+$ && $st -gt 0 ]] && break
+    # у wireguard 18 попыток рукопожатия, потом он молчит до следующего трафика, а NAT иногда глотит пакеты с одного исходного порта:
+    # перезапуск интерфейса даёт новый порт и новую серию попыток
+    (( i == 8 || i == 16 || i == 24 )) && { sp_log "рукопожатия нет, перезапускаю туннель vampn$n (новый исходный порт)"; systemctl restart "awg-quick@vampn$n" >/dev/null 2>&1 || true; }
+    sleep 5
   done
-  [[ $st =~ ^[0-9]+$ && $st -gt 0 ]] || sp_fail "рукопожатия с новым сервером нет за 2 минуты"
+  [[ $st =~ ^[0-9]+$ && $st -gt 0 ]] || sp_fail "рукопожатия с новым сервером нет за 3 минуты (туннель перезапускался трижды)"
   local scan pubscan
   scan=$(ssh-keyscan -T 8 -t ed25519 "$net.1" 2>/dev/null | grep -v '^#' | awk '{print $2, $3}')
   pubscan=$(awk '$1 !~ /^#/ {print $2, $3}' "$CELLS_DIR/$n.known_hosts_public" | head -1)
@@ -2463,14 +2467,16 @@ EOF
 }
 
 # ---------- то, что делается только на живом сервере ----------
+PKGS=(curl jq nftables python3 ca-certificates gnupg git make gcc build-essential dkms perl "linux-headers-$(uname -r)" openssh-server unattended-upgrades systemd-timesyncd traceroute qrencode)
 install_packages() {
-  say "пакеты"
   export DEBIAN_FRONTEND=noninteractive
+  # повторный запуск (усыновление сервера, поднятого vampn init): всё уже стоит и модуль грузится - сеть к apt не трогаем
+  if dpkg -s "${PKGS[@]}" amneziawg-dkms >/dev/null 2>&1 && { modprobe amneziawg 2>/dev/null || false; }; then say "пакеты уже стоят"; return 0; fi
+  say "пакеты"
   # у новых серверов Timeweb сеть бывает с потерями: apt сам повторяет загрузки
   local -a APT=(apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
   "${APT[@]}" update -qq
-  "${APT[@]}" install -y -qq curl jq nftables python3 ca-certificates gnupg git make gcc build-essential dkms perl \
-      "linux-headers-$(uname -r)" openssh-server unattended-upgrades systemd-timesyncd traceroute qrencode >/dev/null
+  "${APT[@]}" install -y -qq "${PKGS[@]}" >/dev/null
   if [[ -f $PAYLOAD/amnezia.gpg ]]; then install -m 644 "$PAYLOAD/amnezia.gpg" /usr/share/keyrings/amnezia.gpg
   elif [[ ! -s /usr/share/keyrings/amnezia.gpg ]]; then
     # на чистом сервере ключа ещё нет (его кладёт spawn): пробуем взять с сервера ключей Ubuntu

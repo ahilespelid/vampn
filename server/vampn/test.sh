@@ -1009,7 +1009,7 @@ ok "spawnresume: команда без номера или с ячейкой 1 �
 INSTALL_NOOK=1; rm -f "$CELLS_DIR"/3.*; spawn_try main
 ok "install.sh без подтверждения VAMPN_INSTALL_OK - сбой" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]]'
 INSTALL_NOOK=0; HS_NONE=1; rm -f "$CELLS_DIR"/3.*; spawn_try main
-ok "нет рукопожатия с новым сервером - сбой, таймер ячейки не включён" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]] && ! grep -q "enable --now vampn-cell@" $CALLS'
+ok "нет рукопожатия с новым сервером - сбой, таймер ячейки не включён, туннель за время ожидания перезапущен 3 раза (новый исходный порт)" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]] && ! grep -q "enable --now vampn-cell@" $CALLS && [[ $(grep -c "restart awg-quick@vampn3" $CALLS) == 3 ]]'
 HS_NONE=0; rm -f "$CELLS_DIR"/3.*
 ( exec 7>"$SPAWN_DIR/lock"; flock -n 7; ( spawn_run main >/dev/null 2>&1 ); echo $? > "$S/rc_lock" ); 
 ok "два spawn одновременно нельзя (занят замок)" '[[ $(cat $S/rc_lock) != 0 ]]'
@@ -1083,9 +1083,9 @@ ok "adopt: токен кабинета и id сервера записаны д�
 rm -rf "$S/spawn"; mkdir -p "$S/spawn"; cp "$CELLS_DIR/4.env" "$S/keep/4.env"
 ( SPAWN_ADOPT=203.0.113.9 SPAWN_RESCUE_HOURS=0 SELF=$T/fakeself2 spawn_run main ) >/dev/null 2>&1
 ok "adopt: ячейка с такой сетью уже есть и живая - отказ, существующая ячейка не портится" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]] && cmp -s $CELLS_DIR/4.env $S/keep/4.env && grep -q "уже есть" "$SPAWN_DIR/job.log"'
-sed -i 's/^CELL_STATE=.*/CELL_STATE=ошибка/' "$CELLS_DIR/4.env"; rm -rf "$S/spawn"; mkdir -p "$S/spawn"
+sed -i 's/^CELL_STATE=.*/CELL_STATE=создаётся/' "$CELLS_DIR/4.env"; rm -rf "$S/spawn"; mkdir -p "$S/spawn"
 ( SPAWN_ADOPT=203.0.113.9 SPAWN_RESCUE_HOURS=0 SELF=$T/fakeself2 spawn_run main ) >/dev/null 2>&1
-ok "adopt: неудачную прошлую попытку (ячейка в ошибке) можно повторить, не удаляя сервер" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == done ]] && ( . "$CELLS_DIR/4.env"; [[ $CELL_STATE == активна ]] ) && ! grep -q "^DELETE" "$TWLOG"'
+ok "adopt: неудачную или оборванную прошлую попытку (ячейка не «активна») можно повторить, не удаляя сервер" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == done ]] && ( . "$CELLS_DIR/4.env"; [[ $CELL_STATE == активна ]] ) && ! grep -q "^DELETE" "$TWLOG"'
 rm -f "$CELLS_DIR"/4.* "$AWG_DIR"/vampn4.conf; sed -i "/vampn-mailrelay-4/d" "$HOME_AK"; TW_SERVERS='{"servers":[]}'; rm -rf "$S/spawn"; mkdir -p "$S/spawn"
 ( SPAWN_ADOPT=203.0.113.9 SPAWN_RESCUE_HOURS=0 SELF=$T/fakeself2 spawn_run main ) >/dev/null 2>&1
 ok "adopt: сервера с таким адресом нет в Timeweb - отказ, ячейка не создаётся" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed && ! -f $CELLS_DIR/4.env ]] && grep -q "не найден в кабинетах" "$SPAWN_DIR/job.log"'

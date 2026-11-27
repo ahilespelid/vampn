@@ -251,14 +251,16 @@ EOF
 }
 
 # ---------- то, что делается только на живом сервере ----------
+PKGS=(curl jq nftables python3 ca-certificates gnupg git make gcc build-essential dkms perl "linux-headers-$(uname -r)" openssh-server unattended-upgrades systemd-timesyncd traceroute qrencode)
 install_packages() {
-  say "пакеты"
   export DEBIAN_FRONTEND=noninteractive
+  # повторный запуск (усыновление сервера, поднятого vampn init): всё уже стоит и модуль грузится - сеть к apt не трогаем
+  if dpkg -s "${PKGS[@]}" amneziawg-dkms >/dev/null 2>&1 && { modprobe amneziawg 2>/dev/null || false; }; then say "пакеты уже стоят"; return 0; fi
+  say "пакеты"
   # у новых серверов Timeweb сеть бывает с потерями: apt сам повторяет загрузки
   local -a APT=(apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
   "${APT[@]}" update -qq
-  "${APT[@]}" install -y -qq curl jq nftables python3 ca-certificates gnupg git make gcc build-essential dkms perl \
-      "linux-headers-$(uname -r)" openssh-server unattended-upgrades systemd-timesyncd traceroute qrencode >/dev/null
+  "${APT[@]}" install -y -qq "${PKGS[@]}" >/dev/null
   if [[ -f $PAYLOAD/amnezia.gpg ]]; then install -m 644 "$PAYLOAD/amnezia.gpg" /usr/share/keyrings/amnezia.gpg
   elif [[ ! -s /usr/share/keyrings/amnezia.gpg ]]; then
     # на чистом сервере ключа ещё нет (его кладёт spawn): пробуем взять с сервера ключей Ubuntu
