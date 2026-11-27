@@ -34,6 +34,10 @@
 #                         самолечение и поднять рабочую ячейку без homeserv; в конце печатает конфиг, QR и ссылку первого пользователя.
 #                         --packages-only - только пакеты и утилиты awg
 #   vampn add ИМЯ [почта] / del ИМЯ   (на таком сервере) завести / удалить пользователя; list, conf, qr, link, status - как везде
+#   vampn adopt IP [--hours Ч] [--no-rescue]
+#                         (homeserv) сервер, поднятый командой vampn init, становится ячейкой, а всех «отвалившихся» из ВСЕХ ячеек
+#                         (нет рукопожатия дольше Ч часов, по умолчанию 24, или ячейка не отвечает) переносит в неё и рассылает им новые ключи
+#   vampn rescue N [--hours Ч] [--dry]   то же самое переносом в уже существующую ячейку N; --dry - только показать, кого перенесёт
 #   vampn installscript   установочный бандл для чистого Debian (install.sh)
 #   VAMPN_CELL=N vampn ... любая команда homeserv для ячейки N (status, rotate, users, mirror, resendall ...)
 #   vampn emergency on     включить аварийный канал (Бостон): VPN и Telegram через него, ключи на почту
@@ -653,6 +657,7 @@ sync_users() {  # привести пользователей к /etc/vampn/user
       [[ -f $f ]] || continue
       n=$(basename "$f" .env)
       [[ $PROTECTED == *" $n "* || -n ${want[$n]:-} ]] && continue
+      grep -qx 'LOCAL=1' "$f" && continue      # заведён на самом сервере (vampn add): список homeserv его не трогает
       echo "- $n"; user_del "$n"
     done
   fi
@@ -859,6 +864,7 @@ srv_add() {  # ИМЯ [ПОЧТА] - новый пользователь на с
   local n=${1:-}
   [[ -n $n ]] || die "vampn add ИМЯ [почта]"
   user_add "$n" "${2:-}"
+  echo "LOCAL=1" >> "$CL/$n.env"
   echo "=== конфиг $n (AmneziaWG; файл $CL/$n.conf) ==="
   cat "$CL/$n.conf"
   echo "=== QR для приложения AmneziaVPN / AmneziaWG ==="
@@ -1855,6 +1861,38 @@ spawn_run() { # КАБИНЕТ - сама аренда и развёртыван
     [[ -n $ip ]] || sp_fail "у сервера ячейки $n нет IPv4"
     sed -i "s|^CELL_IP=.*|CELL_IP=$ip|; s/^CELL_STATE=.*/CELL_STATE=создаётся/" "$CELLS_DIR/$n.env"
     sp_log "ячейка $n, сервер $name (id $sid), IPv4 $ip, сеть $net.0/22"
+  elif [[ -n ${SPAWN_ADOPT:-} ]]; then
+    # усыновление: сервер уже поднят командой vampn init (сам по себе), здесь он становится ячейкой homeserv
+    local kh="$SPAWN_DIR/adopt.known_hosts" senv sub third a limit hn
+    ip=$SPAWN_ADOPT; : > "$kh"
+    sp_step "усыновление: читаю настройки сервера $ip"
+    local -a ssh0=(ssh -T -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=3 -o IdentitiesOnly=yes
+                   -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$kh" -i "$ETC_DIR/spawn.key")
+    senv=$("${ssh0[@]}" "root@$ip" 'cat /root/vampn/server.env' </dev/null 2>/dev/null) || sp_fail "не вхожу на $ip по ключу homeserv или на нём нет /root/vampn (vampn init)"
+    sub=$(sed -n 's/^SUBNET=//p' <<<"$senv"); limit=$(sed -n 's/^CLIENT_LIMIT=//p' <<<"$senv"); [[ $limit =~ ^[0-9]+$ ]] || limit=1000
+    [[ $sub =~ ^10\.77\.([0-9]+)$ ]] || sp_fail "сеть сервера «$sub» не из 10.77.x.0/22"
+    third=${BASH_REMATCH[1]}
+    (( third >= 4 && third <= 252 && third % 4 == 0 )) || sp_fail "сеть $sub.0/22 не подходит для ячейки (нужна 10.77.4, 10.77.8, ...): на сервере vampn init --net 10.77.8"
+    n=$(( third / 4 + 1 )); net=$sub
+    if [[ -f $CELLS_DIR/$n.env ]]; then
+      grep -qx 'CELL_ADOPTED=1' "$CELLS_DIR/$n.env" && grep -qx 'CELL_STATE=ошибка' "$CELLS_DIR/$n.env" \
+        || sp_fail "ячейка $n уже есть (сеть $net.0/22 занята): на новом сервере vampn init --net 10.77.$(( 4 * (n) )) и снова vampn adopt"
+    fi
+    SPAWN_CELL=$n
+    hn=$("${ssh0[@]}" "root@$ip" hostname </dev/null 2>/dev/null | head -1); [[ $hn =~ ^[a-zA-Z0-9_.-]{1,40}$ ]] && name=$hn || name=vampn_$n
+    # сторожу ячейки нужен доступ к серверу в Timeweb (смена IP): ищем сервер с этим адресом в кабинетах
+    sid=""; acct=""
+    for a in $(acct_names); do
+      tok=$(acct_token "$a") || continue; [[ -n $tok ]] || continue
+      sid=$(twa "$tok" GET /servers 2>/dev/null | jq -r --arg ip "$ip" '[.servers[]? | select(any(.networks[]?.ips[]?; .ip == $ip))] | .[0].id // empty' 2>/dev/null)
+      [[ -n $sid ]] && { acct=$a; break; }
+    done
+    [[ -n $sid ]] || sp_fail "сервер с адресом $ip не найден в кабинетах Timeweb ($(acct_names | tr '\n' ' ')): сторожу ячейки нужен его id (vampn account add)"
+    ( umask 077; printf 'CELL_NAME=%s\nCELL_NET=%s\nCELL_LIMIT=%s\nCELL_ACCOUNT=%s\nCELL_SERVER_ID=%s\nCELL_IP=%s\nCELL_STATE=создаётся\nCELL_CREATED=%s\nCELL_ADOPTED=1\n' \
+        "$name" "$net" "$limit" "$acct" "$sid" "$ip" "$(date -Iseconds)" > "$CELLS_DIR/$n.env"
+      printf 'TIMEWEB_TOKEN=%s\nTIMEWEB_SERVER_ID=%s\n' "$tok" "$sid" > "$CELLS_DIR/$n.timeweb.env" )
+    cp "$kh" "$CELLS_DIR/$n.known_hosts_public"
+    sp_log "ячейка $n, сервер $name (id $sid, кабинет $acct), IPv4 $ip, сеть $net.0/22"
   else
   sp_step "проверка кабинета $acct"
   tok=$(acct_token "$acct") && [[ -n $tok ]] || sp_fail "нет токена кабинета $acct (vampn account add)"
@@ -1920,7 +1958,7 @@ spawn_run() { # КАБИНЕТ - сама аренда и развёртыван
   done
   (( deb == 0 )) || { (( deb == 1 )) && sp_fail "на сервере не Debian 12+" || sp_fail "не удалось проверить систему сервера (ssh обрывается)"; }
   sp_step "проверка UDP от homeserv до сервера"
-  sp_udp_check "$ip" || sp_fail "UDP от homeserv до $ip не проходит (адрес режется по пути): туннель на нём не поднимется"
+  [[ -n ${SPAWN_ADOPT:-} ]] || sp_udp_check "$ip" || sp_fail "UDP от homeserv до $ip не проходит (адрес режется по пути): туннель на нём не поднимется"
 
   sp_step "подготовка бандла"
   pay=$(mktemp -d); tmp=$pay
@@ -1930,7 +1968,7 @@ spawn_run() { # КАБИНЕТ - сама аренда и развёртыван
     grep -E '^(MAIL_FROM|ALERT_EMAIL)=' "$ETC_DIR/secrets.env" 2>/dev/null; } > "$pay/secrets.env"
   key_root=$(awk '{print $1, $2}' "$ETC_DIR/spawn.key.pub")
   home_pub=$(curl -4 -s -m 8 https://ifconfig.me 2>/dev/null || true); [[ $home_pub =~ ^[0-9.]+$ ]] || home_pub=""
-  local -a args=(--net "$net" --span 4 --limit 1000 --name "$name" --public-ip "$ip" --payload /root/vampn-bundle
+  local -a args=(--net "$net" --span 4 --limit "$(cell_field "$n" CELL_LIMIT)" --name "$name" --public-ip "$ip" --payload /root/vampn-bundle
                  --key-root "$key_root" --key-users "$(awk '{print $1, $2}' "$ETC_DIR/users.key.pub")" --key-mirror "$(awk '{print $1, $2}' "$ETC_DIR/mirror.key.pub")")
   [[ -z $home_pub ]] || args+=(--home-public-ip "$home_pub")
   local ak; ak=$(grep -E ' vampn-admin$' ${HOME_AK:-/root/.ssh/authorized_keys} 2>/dev/null | awk '{print $1, $2}' | head -3)
@@ -1979,6 +2017,96 @@ spawn_run() { # КАБИНЕТ - сама аренда и развёртыван
   echo "done: ячейка $n ($name) $ip" > "$SPAWN_DIR/job.state"
   sp_log "ГОТОВО: ячейка $n, сервер $name, IPv4 $ip. Новые пользователи назначаются в ячейку с местом."
   sp_notify "развёрнута ячейка $n: сервер $name, $ip (Amsterdam, Debian). Пользователей в неё назначает третий столбец users.conf ($n)."
+  if [[ -n ${SPAWN_ADOPT:-} && ${SPAWN_RESCUE_HOURS:-0} -gt 0 ]]; then
+    sp_step "перенос отвалившихся пользователей в ячейку $n"
+    local l rc
+    ( rescue_main "$n" --hours "$SPAWN_RESCUE_HOURS" ) 2>&1 | while read -r l; do sp_log "$l"; done
+    sp_log "перенос закончен (подробности выше); ход рассылки: vampn mailstatus"
+    echo "done: ячейка $n ($name) $ip" > "$SPAWN_DIR/job.state"
+  fi
+}
+
+rescue_main() { # N [--hours Ч] [--dry] - всех «отвалившихся» из ВСЕХ ячеек перенести в ячейку N: им уходят новые ключи
+  # отвалившийся: в его ячейке нет рукопожатия дольше Ч часов (по умолчанию 24), либо он ни разу не подключался, либо ячейка совсем не отвечает
+  (( CELL == 1 )) || die "rescue запускается без VAMPN_CELL"
+  local n=${1:-} hours=24 dry=0 c out name email cc hs reason age lim cur cnt=0 moved="" cells_touched=" "
+  shift || true
+  while (( $# )); do
+    case $1 in --hours) hours=${2:-}; shift 2 ;; --dry) dry=1; shift ;; *) die "vampn rescue N [--hours Ч] [--dry]" ;; esac
+  done
+  [[ $n =~ ^[0-9]+$ ]] || die "vampn rescue N [--hours Ч] [--dry]  (N - ячейка, в которую переносим)"
+  [[ $hours =~ ^[0-9]+$ ]] && (( hours >= 1 )) || die "--hours: целое число часов"
+  [[ " $(cell_ids | tr '\n' ' ') " == *" $n "* ]] || die "нет ячейки $n"
+  local USERS=${VAMPN_USERS:-/etc/vampn/users.conf} t0; t0=$(now)
+  [[ -f $USERS ]] || die "нет $USERS"
+  declare -A hsmax down
+  for c in $(cell_ids); do
+    [[ $c == "$n" ]] && continue
+    (( $(cell_users "$c") > 0 )) || continue
+    if out=$(VAMPN_CELL=$c "$SELF" peers 2>/dev/null </dev/null) && [[ -n $out ]]; then
+      while IFS=$'\t' read -r _ _ name _ hs _ _; do [[ -n $name ]] && hsmax[$c:$name]=${hs:-0}; done <<<"$out"
+    else down[$c]=1; fi
+  done
+  printf '%-20s %-8s %s\n' ПОЛЬЗОВАТЕЛЬ ЯЧЕЙКА ПРИЧИНА
+  while read -r name email cc; do
+    [[ -z $name || $name == \#* ]] && continue
+    [[ $cc =~ ^[0-9]+$ ]] || cc=1
+    [[ $cc == "$n" ]] && continue
+    if [[ -n ${down[$cc]:-} ]]; then reason="ячейка $cc не отвечает"
+    else
+      hs=${hsmax[$cc:$name]:-0}
+      if (( hs == 0 )); then reason="ни разу не подключался"
+      else age=$(( t0 - hs )); (( age > hours * 3600 )) && reason="последнее подключение $(( age / 3600 )) ч назад" || continue
+      fi
+    fi
+    printf '%-20s %-8s %s\n' "$name" "$cc" "$reason"
+    moved+=" $name"; cnt=$(( cnt + 1 )); [[ $cells_touched == *" $cc "* ]] || cells_touched+="$cc "
+  done < <(sed 's/\r$//' "$USERS")
+  echo "отвалившихся: $cnt (порог $hours ч)"
+  (( cnt > 0 )) || return 0
+  lim=$(cell_field "$n" CELL_LIMIT); cur=$(cell_users "$n")
+  if (( cur + cnt > ${lim:-1000} )); then
+    (( dry )) && echo "ВНИМАНИЕ: в ячейке $n не хватит места: уже $cur, переносим $cnt, лимит ${lim:-1000}" || die "в ячейке $n не хватит места: уже $cur, переносим $cnt, лимит ${lim:-1000}"
+  fi
+  (( dry )) && { echo "это пробный запуск (--dry): ничего не изменено"; return 0; }
+  cp -p "$USERS" "$USERS.bak.$(date +%Y%m%d%H%M%S)"
+  local tmp; tmp=$(mktemp)
+  sed 's/\r$//' "$USERS" | awk -v moved="$moved " -v c="$n" '
+    /^[[:space:]]*#/ || NF == 0 { print; next }
+    index(moved, " " $1 " ") { print $1, $2, c; next }
+    { print }' > "$tmp"
+  cat "$tmp" > "$USERS"; rm -f "$tmp"
+  echo "users.conf обновлён (копия рядом, .bak.*): $cnt пользователей теперь в ячейке $n"
+  for c in $cells_touched $n; do
+    out=$(VAMPN_CELL=$c "$SELF" users 2>&1 </dev/null) && echo "ячейка $c: список применён" || echo "ячейка $c: применить сейчас не вышло ($(tail -c 150 <<<"$out" | tr '\n' ' ')), применится сама, когда сервер ответит"
+  done
+  echo "новые ключи уходят на почту; кому не дошло - vampn mailstatus, повторить - vampn resendall"
+}
+
+adopt_main() { # IP [--hours Ч] [--no-rescue] - сервер, поднятый командой vampn init, становится ячейкой; отвалившиеся из всех ячеек переезжают в неё
+  (( CELL == 1 )) || die "adopt запускается без VAMPN_CELL"
+  local ip=${1:-} hours=24 key out
+  shift || true
+  while (( $# )); do
+    case $1 in --hours) hours=${2:-}; shift 2 ;; --no-rescue) hours=0; shift ;; *) die "vampn adopt IP [--hours Ч] [--no-rescue]" ;; esac
+  done
+  [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "vampn adopt IP [--hours Ч] [--no-rescue]"
+  [[ $hours =~ ^[0-9]+$ ]] || die "--hours: целое число часов"
+  [[ -f $ETC_DIR/spawn.key.pub ]] || die "нет $ETC_DIR/spawn.key.pub (ключ создаётся первой арендой vampn spawn)"
+  key=$(awk '{print $1, $2}' "$ETC_DIR/spawn.key.pub")
+  install -d -m 700 "$SPAWN_DIR"
+  if ! ssh -T -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=3 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+        -o UserKnownHostsFile=/dev/null -i "$ETC_DIR/spawn.key" "root@$ip" true </dev/null 2>/dev/null; then
+    echo "не могу войти на $ip по ключу homeserv. Выполните на том сервере одну строку и повторите vampn adopt $ip:" >&2
+    echo "  echo '$key homeserv' >> /root/.ssh/authorized_keys" >&2
+    exit 1
+  fi
+  if ! ( exec 7>"$SPAWN_DIR/lock"; flock -n 7 ); then die "уже идёт аренда или усыновление (vampn spawnstatus)"; fi
+  echo "queued: усыновление $ip" > "$SPAWN_DIR/job.state"; : > "$SPAWN_DIR/job.log"
+  if command -v systemd-run >/dev/null 2>&1 && [[ -z ${VAMPN_NO_SYSTEMD:-} ]]; then
+    systemd-run -q --collect --unit "vampn-adopt-$(date +%s)" -E "SPAWN_ADOPT=$ip" -E "SPAWN_RESCUE_HOURS=$hours" -E SPAWN_KEEPLOG=1 "$SELF" spawnrun main >/dev/null
+  else SPAWN_ADOPT=$ip SPAWN_RESCUE_HOURS=$hours SPAWN_KEEPLOG=1 nohup setsid "$SELF" spawnrun main >/dev/null 2>&1 </dev/null & fi
+  echo "усыновление запущено в фоне. Ход: vampn spawnstatus 40"
 }
 
 cell_units() { # шаблон сторожа ячейки: vampn-cell@N.service/.timer (то же самое, что vampn.timer для ячейки 1)
@@ -2284,7 +2412,7 @@ write_ssh() {
   local ak=$ROOT/root/.ssh/authorized_keys
   if (( STANDALONE )); then
     # без homeserv: вход по паролю отключаем только если у root уже есть ключ, иначе хозяин останется за дверью
-    if grep -qE '^(ssh-|ecdsa-|sk-)' "$ak" 2>/dev/null; then
+    if grep -E '^(ssh-|ecdsa-|sk-)' "$ak" 2>/dev/null | grep -qvE ' homeserv$'; then
       printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' > "$ROOT/etc/ssh/sshd_config.d/00-vampn.conf"
     else
       say "ВНИМАНИЕ: у root нет ssh-ключа - вход по паролю оставлен. Добавьте ключ в /root/.ssh/authorized_keys, тогда пароль можно отключить"
@@ -2406,7 +2534,7 @@ install_packages
 install_tools
 if (( PACKAGES_ONLY )); then say "пакеты и утилиты awg готовы"; echo "VAMPN_INIT_OK=1"; exit 0; fi
 write_awg; write_sysctl; write_nft; write_ssh; write_units
-(( ! STANDALONE )) || : > "$V/standalone"      # метка: сервер сам следит за своим адресом (homeserv нет)
+if (( STANDALONE )); then : > "$V/standalone"; else rm -f "$V/standalone"; fi   # метка: сервер сам следит за своим адресом (homeserv нет); при усыновлении снимается
 activate
 (( STANDALONE )) || "/usr/local/sbin/vampn" homeinit >/dev/null     # создаёт пира homeserv (адрес $NET.3); его конфиг homeserv заберёт командой `vampn homeconf`
 verify
@@ -2429,7 +2557,9 @@ home_main() {
     cells)      cells_main; return ;;
     account)    shift; account_main "$@"; return ;;
     spawn)      spawn_main "${2:-}"; return ;;
-    spawnrun)     if [[ -n ${SPAWN_RESUME:-} ]]; then spawn_run "${2:?кабинет}"; else spawn_loop "${2:?кабинет}"; fi; return ;;
+    adopt)      shift; adopt_main "$@"; return ;;
+    rescue)     shift; rescue_main "$@"; return ;;
+    spawnrun)     if [[ -n ${SPAWN_RESUME:-}${SPAWN_ADOPT:-} ]]; then spawn_run "${2:?кабинет}"; else spawn_loop "${2:?кабинет}"; fi; return ;;
     spawnresume) spawn_resume_main "${2:-}"; return ;;
     spawnstatus) spawn_status "${2:-}"; return ;;
     celldel)   shift; cell_del "$@"; return ;;
@@ -2525,7 +2655,14 @@ init_main() { # vampn init [--user ИМЯ] [--net 10.77.4] [--port N] [--public-
   else
     echo "[init] пользователи уже есть: vampn list; новый - vampn add ИМЯ" >&2
   fi
+  if [[ -s $dir/homeserv.pub ]]; then
+    install -d -m 700 /root/.ssh
+    grep -qF "$(awk '{print $2}' "$dir/homeserv.pub" | head -1)" /root/.ssh/authorized_keys 2>/dev/null \
+      || awk 'NF>=2 {print $1, $2, "homeserv"}' "$dir/homeserv.pub" | head -1 >> /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+  fi
   echo "[init] готово: сервер vampn работает. Команды: vampn add ИМЯ, vampn list, vampn conf ИМЯ, vampn qr ИМЯ, vampn link ИМЯ, vampn del ИМЯ, vampn status" >&2
+  echo "[init] чтобы подключить сервер к системе (ячейка, перенос отвалившихся, новые ключи), на homeserv: vampn adopt $pub" >&2
 }
 
 selfupdate_main() { # stdin: новый скрипт vampn от homeserv; ставится, только если он целый, старый остаётся как .prev

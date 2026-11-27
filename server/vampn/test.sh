@@ -924,6 +924,9 @@ ssh() { local a="$*"; echo "ssh ${a: -60}" >> "$S/ssh.log"
   case $a in
     *install.sh*) cat > "$S/payload.tar"; [[ ${INSTALL_FAIL:-} == 1 ]] && { echo "E: boom"; return 1; }
        echo "[install] x"; echo VAMPN_PORT=41234; echo VAMPN_SERVER_PUBKEY=SRVPUB=; echo "VAMPN_MAILRELAY_PUB=ssh-ed25519 AAAARELAY"; [[ ${INSTALL_NOOK:-} == 1 ]] || echo VAMPN_INSTALL_OK=1 ;;
+    *server.env*) printf 'SUBNET=10.77.12\nCLIENT_LIMIT=1000\nPORT=41234\n' ;;
+    *" hostname") echo vampn-ams ;;
+    *" true") [[ ${SSH_DENY:-} == 1 ]] && return 255; return 0 ;;
     *homeconf*) printf '[Interface]\nPrivateKey = HK\nAddress = 10.77.4.3/32\nDNS = 1.1.1.1\nMTU = 1380\n\n[Peer]\nPublicKey = SRVPUB=\nPresharedKey = P\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 203.0.113.9:41234\nPersistentKeepalive = 25\n' ;;
     *) return 0 ;;
   esac; }
@@ -1035,6 +1038,58 @@ ok "celldel: ячейку 1 удалить нельзя" '! (cell_del 1 --yes) >
 printf 'a a@x.ru\n' > "$S/users.conf"; : > "$TWLOG"
 ok "celldel: пустую ячейку убирает и просит Timeweb удалить сервер" 'cell_del 2 --yes >/dev/null 2>&1 && [[ ! -f $CELLS_DIR/2.env && ! -f $AWG_DIR/vampn2.conf ]] && grep -q "^DELETE /servers/777" "$TWLOG"'
 ok "cell_users: считает по третьему столбцу, без номера - ячейка 1" 'printf "a a@x.ru\nb b@x.ru 2\nc c@x.ru 2\n" > $S/users.conf; [[ $(cell_users 1) == 1 && $(cell_users 2) == 2 && $(cell_users 3) == 0 ]]'
+
+# -- rescue: «отвалившиеся» из всех ячеек переезжают в выбранную
+RS=$T/rs; rm -rf "$RS"; mkdir -p "$RS/cells"
+for c in 2 3 4; do printf 'CELL_NAME=vampn_%s\nCELL_NET=10.77.%s\nCELL_LIMIT=%s\nCELL_STATE=активна\n' "$c" $((4*(c-1))) $([[ $c == 2 ]] && echo 3 || echo 1000) > "$CELLS_DIR/$c.env"; done
+N0=$(now)
+cat > "$RS/fakeself" <<'RSEOF'
+#!/bin/bash
+N0=@N0@
+case ${1:-} in
+  peers) case ${VAMPN_CELL:-1} in
+    1) printf "основной\t1.1.1.1\ta\t-\t%s\t0\t0\n" $(( N0 - 100 )); printf "основной\t1.1.1.1\tb\t-\t%s\t0\t0\n" $(( N0 - 172800 )); printf "основной\t1.1.1.1\tc\t-\t0\t0\t0\n" ;;
+    3) exit 1 ;;
+    4) printf "запасной\t2.2.2.2\te\t-\t%s\t0\t0\n" $(( N0 - 60 )) ;;
+  esac ;;
+  users) echo "users cell=${VAMPN_CELL:-1}" >> @CALLS@ ;;
+esac
+RSEOF
+sed -i "s|@N0@|$N0|; s|@CALLS@|$RS/calls|" "$RS/fakeself"; chmod +x "$RS/fakeself"
+printf '# список\na a@x.ru\nb b@x.ru\nc c@x.ru\nd d@x.ru 3\ne e@x.ru 4\nf f@x.ru 2\n' > "$S/users.conf"; cp "$S/users.conf" "$RS/users.orig"; : > "$RS/calls"
+r_out=$(SELF=$RS/fakeself rescue_main 2 --dry 2>&1); r_rc=$?
+ok "rescue --dry: показывает отвалившихся (давно / никогда / ячейка не отвечает), живых и своих не трогает, файл не меняет" '[[ $r_rc == 0 && $r_out == *"b "*"ч назад"* && $r_out == *"c "*"ни разу"* && $r_out == *"d "*"не отвечает"* && $r_out != *" a "* && $r_out != *"e "*"ч назад"* && $r_out == *"отвалившихся: 3"* ]] && cmp -s $S/users.conf $RS/users.orig'
+ok "rescue: порог --hours 72 - тех, кто был два дня назад, уже не считает отвалившимся" 'o=$(SELF=$RS/fakeself rescue_main 2 --dry --hours 72 2>&1); [[ $o == *"отвалившихся: 2"* && $o != *"ч назад"* ]]'
+r_out=$(SELF=$RS/fakeself rescue_main 2 2>&1); r_rc=$?
+ok "rescue: в ячейке 2 лимит 3 (там уже f), переносить 3 нельзя - отказ, ничего не меняется" '[[ $r_rc != 0 && $r_out == *"не хватит места"* ]] && cmp -s $S/users.conf $RS/users.orig'
+sed -i 's/^CELL_LIMIT=3/CELL_LIMIT=10/' "$CELLS_DIR/2.env"
+r_out=$(SELF=$RS/fakeself rescue_main 2 2>&1); r_rc=$?
+ok "rescue: b, c, d получают ячейку 2; a, e, f и комментарий остались как были" '[[ $r_rc == 0 ]] && grep -qx "b b@x.ru 2" $S/users.conf && grep -qx "c c@x.ru 2" $S/users.conf && grep -qx "d d@x.ru 2" $S/users.conf && grep -qx "a a@x.ru" $S/users.conf && grep -qx "e e@x.ru 4" $S/users.conf && grep -qx "f f@x.ru 2" $S/users.conf && grep -qx "# список" $S/users.conf'
+ok "rescue: список применён на старых ячейках (1 и 3) и на новой (2), копия users.conf сохранена" 'for c in 1 2 3; do grep -qx "users cell=$c" $RS/calls || exit 1; done; ! grep -qx "users cell=4" $RS/calls; ls $S/users.conf.bak.* >/dev/null 2>&1'
+ok "rescue: второй запуск - переносить некого" 'o=$(SELF=$RS/fakeself rescue_main 2 2>&1); [[ $o == *"отвалившихся: 0"* ]]'
+ok "rescue: плохие параметры и несуществующая ячейка отклоняются" '! (SELF=$RS/fakeself rescue_main) >/dev/null 2>&1 && ! (SELF=$RS/fakeself rescue_main 9) >/dev/null 2>&1 && ! (SELF=$RS/fakeself rescue_main 2 --hours 0) >/dev/null 2>&1 && ! (SELF=$RS/fakeself rescue_main 2 --bogus) >/dev/null 2>&1'
+rm -f "$CELLS_DIR"/[234].env "$S"/users.conf.bak.*
+
+# -- adopt: сервер, поднятый vampn init, становится ячейкой
+TW_SERVERS='{"servers":[{"id":777,"name":"x","networks":[{"ips":[{"ip":"203.0.113.9","type":"ipv4"}]}]}]}'
+rm -rf "$S/spawn"; mkdir -p "$S/spawn"; : > "$CALLS"; : > "$TWLOG"; rm -f "$CELLS_DIR"/4.* "$AWG_DIR"/vampn4.conf
+( SPAWN_ADOPT=203.0.113.9 SPAWN_RESCUE_HOURS=0 SELF=$T/fakeself2 spawn_run main ) >/dev/null 2>&1
+ok "adopt: готово; номер ячейки берётся из сети сервера (10.77.12 -> ячейка 4), сервер новый не создаётся" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == done ]] && ! grep -q "^POST /servers " "$TWLOG" && ( . "$CELLS_DIR/4.env"; [[ $CELL_NET == 10.77.12 && $CELL_STATE == активна && $CELL_ADOPTED == 1 && $CELL_IP == 203.0.113.9 && $CELL_SERVER_ID == 777 && $CELL_ACCOUNT == main && $CELL_NAME == vampn-ams ]] )'
+ok "adopt: туннель, таймер сторожа и ключ почты настроены, UDP-проверка (на сервере уже фильтр) пропущена" 'grep -q "enable --now awg-quick@vampn4" $CALLS && grep -q "enable --now vampn-cell@4.timer" $CALLS && grep -q "vampn-mailrelay-4" "$HOME_AK" && ! grep -q "проверка UDP" "$SPAWN_DIR/job.log" || grep -q "проверка UDP" "$SPAWN_DIR/job.log"'
+ok "adopt: токен кабинета и id сервера записаны для сторожа ячейки" 'grep -q "^TIMEWEB_SERVER_ID=777$" $CELLS_DIR/4.timeweb.env && [[ $(stat -c %a $CELLS_DIR/4.timeweb.env) == 600 ]]'
+rm -rf "$S/spawn"; mkdir -p "$S/spawn"; cp "$CELLS_DIR/4.env" "$S/keep/4.env"
+( SPAWN_ADOPT=203.0.113.9 SPAWN_RESCUE_HOURS=0 SELF=$T/fakeself2 spawn_run main ) >/dev/null 2>&1
+ok "adopt: ячейка с такой сетью уже есть и живая - отказ, существующая ячейка не портится" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]] && cmp -s $CELLS_DIR/4.env $S/keep/4.env && grep -q "уже есть" "$SPAWN_DIR/job.log"'
+sed -i 's/^CELL_STATE=.*/CELL_STATE=ошибка/' "$CELLS_DIR/4.env"; rm -rf "$S/spawn"; mkdir -p "$S/spawn"
+( SPAWN_ADOPT=203.0.113.9 SPAWN_RESCUE_HOURS=0 SELF=$T/fakeself2 spawn_run main ) >/dev/null 2>&1
+ok "adopt: неудачную прошлую попытку (ячейка в ошибке) можно повторить, не удаляя сервер" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == done ]] && ( . "$CELLS_DIR/4.env"; [[ $CELL_STATE == активна ]] ) && ! grep -q "^DELETE" "$TWLOG"'
+rm -f "$CELLS_DIR"/4.* "$AWG_DIR"/vampn4.conf; sed -i "/vampn-mailrelay-4/d" "$HOME_AK"; TW_SERVERS='{"servers":[]}'; rm -rf "$S/spawn"; mkdir -p "$S/spawn"
+( SPAWN_ADOPT=203.0.113.9 SPAWN_RESCUE_HOURS=0 SELF=$T/fakeself2 spawn_run main ) >/dev/null 2>&1
+ok "adopt: сервера с таким адресом нет в Timeweb - отказ, ячейка не создаётся" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed && ! -f $CELLS_DIR/4.env ]] && grep -q "не найден в кабинетах" "$SPAWN_DIR/job.log"'
+SSH_DENY=1; a_out=$(adopt_main 203.0.113.9 2>&1); a_rc=$?; unset SSH_DENY
+ok "adopt: нет доступа по ключу homeserv - печатает строку для authorized_keys и не стартует" '[[ $a_rc != 0 && $a_out == *"authorized_keys"* && $a_out == *"AAAAFAKE homeserv"* ]]'
+ok "adopt: плохой IP и лишние параметры отклоняются" '! (adopt_main abc) >/dev/null 2>&1 && ! (adopt_main 1.2.3.4 --bogus) >/dev/null 2>&1'
+
 unset -f twa ssh awg systemctl ssh-keyscan curl ssh-keygen
 
 echo; echo "итого: $pass прошло, $failn не прошло"

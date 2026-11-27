@@ -200,7 +200,7 @@ write_ssh() {
   local ak=$ROOT/root/.ssh/authorized_keys
   if (( STANDALONE )); then
     # без homeserv: вход по паролю отключаем только если у root уже есть ключ, иначе хозяин останется за дверью
-    if grep -qE '^(ssh-|ecdsa-|sk-)' "$ak" 2>/dev/null; then
+    if grep -E '^(ssh-|ecdsa-|sk-)' "$ak" 2>/dev/null | grep -qvE ' homeserv$'; then
       printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' > "$ROOT/etc/ssh/sshd_config.d/00-vampn.conf"
     else
       say "ВНИМАНИЕ: у root нет ssh-ключа - вход по паролю оставлен. Добавьте ключ в /root/.ssh/authorized_keys, тогда пароль можно отключить"
@@ -322,7 +322,7 @@ install_packages
 install_tools
 if (( PACKAGES_ONLY )); then say "пакеты и утилиты awg готовы"; echo "VAMPN_INIT_OK=1"; exit 0; fi
 write_awg; write_sysctl; write_nft; write_ssh; write_units
-(( ! STANDALONE )) || : > "$V/standalone"      # метка: сервер сам следит за своим адресом (homeserv нет)
+if (( STANDALONE )); then : > "$V/standalone"; else rm -f "$V/standalone"; fi   # метка: сервер сам следит за своим адресом (homeserv нет); при усыновлении снимается
 activate
 (( STANDALONE )) || "/usr/local/sbin/vampn" homeinit >/dev/null     # создаёт пира homeserv (адрес $NET.3); его конфиг homeserv заберёт командой `vampn homeconf`
 verify
