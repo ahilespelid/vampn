@@ -7,6 +7,7 @@
 # Команды (запускайте на homeserv):
 #   vampn status           состояние сторожа: туннель, Timeweb, смены IP, журнал
 #   vampn server           состояние самого VPN-сервера
+#   vampn snapshot         настройки VPN-сервера без ключей (только чтение; по ним собран install.sh)
 #   vampn list             пользователи VPN и их последнее подключение
 #   vampn peers            только чтение: по каждому ключу сервер, IP клиента, рукопожатие, принято и отправлено байт (для статистики в приложении)
 #   vampn reissue ИМЯ      перевыпустить ключ (старый перестаёт работать), новый уйдёт на почту
@@ -33,11 +34,26 @@
 #   alert, conf, qr, _mail, _endpoint-change, selfupdate. Журнал отправки писем: /var/lib/vampn/mail-status.tsv.
 set -uo pipefail
 SELF=/usr/local/sbin/vampn
+# Ячейка = отдельный VPN-сервер со своими ключами, адресом и туннелем (до ~1000 клиентов на ячейку). Ячейка 1 - исходная,
+# её состояние и файлы остались прежними. Для остальных: VAMPN_CELL=N vampn ... (так их запускает vampn-cell@N.timer),
+# настройки ячейки лежат в /etc/vampn/cells/N.env (CELL_NET - три октета адресов туннеля, CELL_NAME, CELL_LIMIT).
+CELL=${VAMPN_CELL:-1}
+[[ $CELL =~ ^[0-9]{1,3}$ ]] && (( CELL >= 1 )) || { echo "vampn: плохой номер ячейки '$CELL'" >&2; exit 1; }
 STATE=/var/lib/vampn
+TUN_NET=10.77.0 TUN_IFACE=vampn CELL_NAME=vampn CELL_LIMIT=1000
+if (( CELL > 1 )); then
+  CELL_ENV=${VAMPN_ETC:-/etc/vampn}/cells/$CELL.env
+  [[ -f $CELL_ENV ]] || { echo "vampn: нет ячейки $CELL ($CELL_ENV)" >&2; exit 1; }
+  # shellcheck disable=SC1090
+  . "$CELL_ENV"
+  TUN_NET=${CELL_NET:?нет CELL_NET в $CELL_ENV}; TUN_IFACE=vampn$CELL; STATE=${VAMPN_CELLS_STATE:-/var/lib/vampn/cells}/$CELL
+fi
+SRV_TIP=$TUN_NET.1 HOME_TIP=$TUN_NET.3   # адреса сервера и homeserv внутри туннеля этой ячейки
 mkdir -p "$STATE"; chmod 700 "$STATE"
-if   [[ -f /etc/vampn/role ]];                   then ROLE=$(< /etc/vampn/role)   # emergency - Бостон
-elif [[ -f /etc/amnezia/amneziawg/awg0.conf ]];  then ROLE=server
-elif [[ -f /etc/amnezia/amneziawg/vampn.conf ]]; then ROLE=home
+AWG_DIR=${VAMPN_AWG_DIR:-/etc/amnezia/amneziawg}
+if   [[ -f ${VAMPN_ETC:-/etc/vampn}/role ]];     then ROLE=$(< "${VAMPN_ETC:-/etc/vampn}/role")   # emergency - Бостон
+elif [[ -f $AWG_DIR/awg0.conf ]];                then ROLE=server
+elif [[ -f $AWG_DIR/$TUN_IFACE.conf ]];          then ROLE=home
 else echo "vampn: не понял, где запущен (нет конфига AmneziaWG)" >&2; exit 1; fi
 
 now() { date +%s; }
@@ -93,6 +109,7 @@ def load_env(path):
 
 
 S = load_env('/etc/vampn/secrets.env')
+HOME_TIP = load_env(BASE + '/server.env').get('SUBNET', '10.77.0') + '.3'   # homeserv внутри туннеля этого сервера
 
 
 def _smtp_once(m):
@@ -233,7 +250,7 @@ def relay_fresh():
     первое же письмо с неактивного сервера утащило бы туннель homeserv на него (пир «переезжает» на того, кто написал)."""
     try:
         ak = subprocess.run(['awg', 'show', 'awg0', 'allowed-ips'], capture_output=True, text=True, timeout=5).stdout
-        pk = next((l.split()[0] for l in ak.splitlines() if '10.77.0.3/32' in l.split()[1:]), None)
+        pk = next((l.split()[0] for l in ak.splitlines() if HOME_TIP + '/32' in l.split()[1:]), None)
         if not pk:
             return True    # это не VPN-сервер или homeserv у него не пир - не мешаем
         hs = subprocess.run(['awg', 'show', 'awg0', 'latest-handshakes'], capture_output=True, text=True, timeout=5).stdout
@@ -253,7 +270,7 @@ def deliver(m):
             ['ssh', '-i', '/root/.ssh/mailrelay', '-p', S.get('RELAY_PORT', '777'),
              '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'IdentitiesOnly=yes', '-o', 'LogLevel=ERROR',
              '-o', 'StrictHostKeyChecking=accept-new', '-o', 'UserKnownHostsFile=/root/.ssh/mailrelay.known_hosts',
-             'root@' + S.get('RELAY_HOST', '10.77.0.3')],
+             'root@' + S.get('RELAY_HOST', HOME_TIP)],
             input=m.as_bytes(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
         out = r.stdout.decode(errors='replace').strip()
         if r.returncode == 0:
@@ -300,7 +317,7 @@ def vpn_link(name):
                 server_pub_key=sv['SERVER_PUBKEY'], psk_key=u['PSK'], allowed_ips=allowed,
                 persistent_keep_alive='25', mtu=str(sv['MTU']))
     awg = dict(obf, port=str(sv['PORT']), transport_proto='udp', protocol_version='2',
-               subnet_address=sv.get('SUBNET', '10.77.0') + '.0', subnet_cidr='24',
+               subnet_address=sv.get('SUBNET', '10.77.0') + '.0', subnet_cidr=sv.get('SUBNET_CIDR', '24'),
                last_config=json.dumps(last, ensure_ascii=False, separators=(',', ':')))
     doc = {'containers': [{'container': 'amnezia-awg2', 'awg': awg}],
            'defaultContainer': 'amnezia-awg2', 'description': profile(name),
@@ -448,12 +465,16 @@ data_init() {
   ENDPOINT_IP=$(cat "$BASE/endpoint")
 }
 
-next_ip() {
-  local used n
-  used=$(grep -h '^IP=' "$CL"/*.env 2>/dev/null | cut -d= -f2 | awk -F. '{print $4}')
-  for n in $(seq 2 254); do grep -qx "$n" <<<"$used" || { echo "$SUBNET.$n"; return; }; done
+next_ip() {  # свободный адрес клиента; SUBNET_SPAN (по умолчанию 1) - сколько подряд идёт /24: у ячейки 4 (/22) это ~1000 клиентов
+  local used o n base third span=${SUBNET_SPAN:-1}
+  used=$(grep -h '^IP=' "$CL"/*.env 2>/dev/null | cut -d= -f2)
+  base=${SUBNET%.*}; third=${SUBNET##*.}
+  for (( o = 0; o < span; o++ )); do
+    for n in $(seq 2 254); do grep -qx "$base.$((third + o)).$n" <<<"$used" || { echo "$base.$((third + o)).$n"; return; }; done
+  done
   die "подсеть заполнена"
 }
+client_count() { local n=0 f; for f in "$CL"/*.env; do [[ -f $f && $(basename "$f" .env) != homeserv ]] && n=$((n + 1)); done; echo "$n"; }
 
 render() {  # ИМЯ -> $CL/ИМЯ.conf
   local f=$CL/$1.env
@@ -507,6 +528,7 @@ user_add() {  # ИМЯ ПОЧТА
   local name=$1 email=${2:-} sk
   valid_name "$name"; valid_email "$email"
   [[ -f $CL/$name.env ]] && die "пользователь $name уже есть"
+  [[ -z ${CLIENT_LIMIT:-} ]] || (( $(client_count) < CLIENT_LIMIT )) || die "сервер заполнен: уже $CLIENT_LIMIT клиентов"
   sk=$(awg genkey)
   ( umask 077; cat > "$CL/$name.env" <<EOF
 NAME=$name
@@ -766,6 +788,49 @@ srv_users_push() {  # список пользователей приходит �
   sync_users 2>&1 | while read -r l; do srv_log "users: $l"; echo "$l"; done
 }
 
+srv_snapshot() {  # только чтение: настройки сервера без ключей (по нему собирается установочный бандл)
+  local f
+  echo "### os";        . /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-?}"; uname -r
+  echo "### packages";  dpkg -l 2>/dev/null | awk '/^ii/ && $2 ~ /amnez|dkms|nftables|netplan|openssh-server|^curl$|^jq$|^python3$|resolvconf|unattended|chrony|timesyncd/ {print $2, $3}'
+  echo "### apt";       for f in /etc/apt/sources.list.d/amnezia*; do [[ -f $f ]] && { echo "-- $f"; cat "$f"; }; done
+  echo "### awg0.conf (без ключей)"; sed '/^\[Peer\]/,$d' "$SRV_AWG_CONF" 2>/dev/null | grep -vE '^(PrivateKey|PresharedKey)'
+  echo "### nft";       nft list ruleset 2>&1
+  echo "### sysctl";    cat /etc/sysctl.d/*.conf /etc/sysctl.conf 2>/dev/null | grep -vE '^\s*(#|$)'
+  echo "### sshd";      sshd -T 2>/dev/null | grep -E '^(port|permitrootlogin|passwordauthentication|pubkeyauthentication|listenaddress|kbdinteractiveauthentication) '
+  for f in /etc/ssh/sshd_config.d/*.conf; do [[ -f $f ]] && { echo "-- $f"; grep -vE '^\s*(#|$)' "$f"; }; done
+  echo "### authorized_keys (тела ключей скрыты)"
+  sed -E 's#(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]+#\1 <key>#' /root/.ssh/authorized_keys 2>/dev/null
+  echo "### units";     systemctl cat vampn.service vampn.timer 2>&1 | head -40
+  echo "### enabled";   systemctl is-enabled awg-quick@awg0 nftables vampn.timer ssh sshd systemd-networkd 2>&1
+  echo "### netplan";   cat /etc/netplan/*.yaml 2>/dev/null
+  echo "### etc/vampn"; ls -la /etc/vampn 2>&1
+  echo "### data";      ls -la "$BASE" "$STATE" 2>&1 | head -40
+  echo "### server.env (без ключей)"; grep -vE 'PRIV|PSK' "$BASE/server.env" 2>/dev/null
+  for f in setup_awg.sh nftables.conf.tpl; do [[ -f $BASE/$f ]] && { echo "### $f"; grep -vE 'PRIVKEY=\S{20,}|PSK=\S{20,}' "$BASE/$f"; }; done
+  echo "### nftables.conf"; cat /etc/nftables.conf 2>/dev/null
+}
+
+srv_home_init() {  # локально, при установке: пир homeserv (адрес .3) для туннеля homeserv -> этот сервер. Повторный вызов ничего не меняет.
+  local f=$CL/homeserv.env sk
+  if [[ ! -f $f ]]; then
+    sk=$(awg genkey)
+    ( umask 077; cat > "$f" <<EOF
+NAME=homeserv
+EMAIL=
+IP=$SUBNET.3
+PRIVKEY=$sk
+PUBKEY=$(echo "$sk" | awg pubkey)
+PSK=$(awg genpsk)
+CREATED=$(date -Iseconds)
+EOF
+    )
+    render homeserv; sync_server
+  fi
+}
+srv_home_conf() {  # локально: конфиг туннеля для homeserv (адрес сервера - как в endpoint). Его же берёт vampn spawn.
+  render homeserv; cat "$CL/homeserv.conf"
+}
+
 srv_user_cmd() {  # reissue|resend|link ИМЯ
   local n=${2:-}
   [[ $n =~ ^[a-zA-Z0-9_.-]{1,32}$ ]] || die "нужно имя пользователя: vampn $1 ИМЯ"
@@ -791,12 +856,16 @@ server_main() {
     users-push) data_init; srv_users_push ;;
     expect-ip)  data_init; srv_expect_ip "${2:-}" ;;
     unpin)      data_init; srv_unpin ;;
+    snapshot)   data_init; srv_snapshot ;;
+    home-init)  data_init; srv_home_init ;;     # только локально (не в списке remote): ставит install.sh
+    home-conf)  data_init; srv_home_conf ;;
     remote)  # принудительная команда ключа homeserv: разрешён только этот список действий
       local a; read -r -a a <<<"${SSH_ORIGINAL_COMMAND:-users-push}"
       case ${a[0]:-} in
         users-push|list|peers|status|selfupdate) exec "$SELF" "${a[0]}" ;;
         reissue|resend|link|expect-ip)    exec "$SELF" "${a[0]}" "${a[1]:-}" ;;
         unpin)    exec "$SELF" unpin ;;
+        snapshot) exec "$SELF" snapshot ;;
         *) die "команда не разрешена: ${a[0]:-}" ;;
       esac ;;
     *) echo "vampn: неизвестная команда «$cmd»" >&2; usage 1 ;;
@@ -878,11 +947,11 @@ emergency_main() {
 # Сообщения: Telegram (tg notify alerts) + письмо - Telegram ходит через этот же туннель. Одно сообщение
 # на одну аварию. Пока туннель жив: применяет users.conf, раз в 10 мин копирует данные пользователей.
 # ====================================================================================================
-IFACE=vampn
-TUN_CONF=/etc/amnezia/amneziawg/vampn.conf
+IFACE=$TUN_IFACE
+TUN_CONF=/etc/amnezia/amneziawg/$TUN_IFACE.conf
 MIRROR=$STATE/mirror
 API=https://api.timeweb.cloud/api/v1
-HS_FRESH=45 PROBE_TRIES=3 PROBE_TIMEOUT=3 PROBE_HOST=10.77.0.1
+HS_FRESH=45 PROBE_TRIES=3 PROBE_TIMEOUT=3 PROBE_HOST=$SRV_TIP
 REBOOT_AT=2 ROTATE_AT=5 REBOOT_GAP=$((30*60)) ROUTE_MIN_HOP=4
 ROTATE_RETRY=180 ROTATE_RETRY_SLOW=300 ATT_FAST=3 ATT_MAX=20   # попытки вернуть связь: первые 3 раз в 3 мин, дальше раз в 5 мин, всего на двух серверах не больше 20
 MAX_ROT_PER_DAY=4 MIRROR_EVERY=600
@@ -944,6 +1013,7 @@ ip_budget_ok() { # свои же счётчики: автосмена не бе�
 }
 # Два сервера Timeweb: 1 - основной (/etc/vampn/timeweb.env), 2 - запасной (/etc/vampn/timeweb2.env, клон основного).
 TW_ENV1=/etc/vampn/timeweb.env TW_ENV2=/etc/vampn/timeweb2.env
+(( CELL > 1 )) && { TW_ENV1=${VAMPN_ETC:-/etc/vampn}/cells/$CELL.timeweb.env; TW_ENV2=/nonexistent; }   # у ячейки свой сервер Timeweb, запасного нет
 TARGET=1 TSUF=""
 tw_targets() { [[ -f $TW_ENV2 ]] && echo "1 2" || echo 1; }
 tw_label() { [[ ${TARGET:-1} == 1 ]] && echo "основной" || echo "запасной"; }
@@ -1023,7 +1093,7 @@ do_reboot() { # [hard]
 
 pull_mirror() { # копия данных пользователей с сервера (ключ с принудительной командой tar, только чтение)
   local tmp; tmp=$(mktemp -d)
-  if "${SSH_SRV[@]}" -i /etc/vampn/mirror.key root@10.77.0.1 2>/dev/null | tar -xzf - -C "$tmp" 2>/dev/null \
+  if "${SSH_SRV[@]}" -i /etc/vampn/mirror.key root@$SRV_TIP 2>/dev/null | tar -xzf - -C "$tmp" 2>/dev/null \
      && [[ -f $tmp/server.env && -d $tmp/clients ]]; then
     chmod 700 "$tmp"; rm -rf "$MIRROR.old"; [[ -d $MIRROR ]] && mv "$MIRROR" "$MIRROR.old"
     mv "$tmp" "$MIRROR"; rm -rf "$MIRROR.old"; put last_mirror "$(now)"
@@ -1032,7 +1102,7 @@ pull_mirror() { # копия данных пользователей с серв
   rm -rf "$tmp"; log "копия данных: не удалось скопировать с сервера"; return 1
 }
 
-remote() { "${SSH_SRV[@]}" -i /etc/vampn/users.key root@10.77.0.1 "$1" </dev/null; }
+remote() { "${SSH_SRV[@]}" -i /etc/vampn/users.key root@$SRV_TIP "$1" </dev/null; }
 push_expect() { # [IP] - сообщить активному VPN-серверу, какой адрес ему выдан в Timeweb (он закрепит его, если Timeweb не отдал по DHCP)
   local ip=${1:-} last t; t=$(now)
   [[ -n $ip ]] || ip=$(main_ipv4); [[ -n $ip ]] || return 1
@@ -1046,19 +1116,31 @@ announce_ip() { # СТАРЫЙ НОВЫЙ - перед удалением ста
   if [[ $n == "$(get active_target 1)" ]]; then
     alive && remote "expect-ip $new" >/dev/null 2>&1 && { log "[$(tw_label)] серверу сообщён новый адрес $new (через туннель)"; return 0; }
   elif [[ -n $old ]]; then
-    out=$("${SSH_SRV[@]}" -i /etc/vampn/users.key -o HostKeyAlias=10.77.0.1 -o ConnectTimeout=8 "root@$old" "expect-ip $new" </dev/null 2>&1) \
+    out=$("${SSH_SRV[@]}" -i /etc/vampn/users.key -o HostKeyAlias=$SRV_TIP -o ConnectTimeout=8 "root@$old" "expect-ip $new" </dev/null 2>&1) \
       && { log "[$(tw_label)] серверу сообщён новый адрес $new (напрямую на $old)"; return 0; }
   fi
   [[ -n $out ]] && out=" [$(tail -c 80 <<<"$out" | tr '\n' ' ')]"
   log "[$(tw_label)] серверу новый адрес $new сообщить не вышло$out - сервер получит его по DHCP"; return 1
 }
 
+# Список пользователей этой ячейки из общего /etc/vampn/users.conf: строки "ИМЯ ПОЧТА [ЯЧЕЙКА]", без номера - ячейка 1.
+# Пишет $STATE/users.cell (там уже только ИМЯ ПОЧТА, как ждёт сервер) и печатает путь; нет общего файла - ничего не печатает.
+users_conf_file() {
+  local src=${VAMPN_USERS:-/etc/vampn/users.conf} o=$STATE/users.cell
+  [[ -f $src ]] || return 1
+  sed 's/\r$//' "$src" | awk -v c="$CELL" '
+    /^[[:space:]]*#/ || NF == 0 { next }
+    NF == 3 && $3 ~ /^[0-9]+$/ { if ($3 + 0 == c) print $1, $2; next }
+    { if (c == 1) print }' > "$o.new" && mv -f "$o.new" "$o"
+  echo "$o"
+}
+
 push_users() { # [force] - users.conf изменился -> отправить на сервер и применить
-  local f=/etc/vampn/users.conf sum out changes
-  [[ -f $f ]] || return 0
+  local f sum out changes
+  f=$(users_conf_file) || return 0
   sum=$(sha256sum "$f" | cut -d' ' -f1)
   [[ ${1:-} != force && $sum == "$(get users_pushed none)" ]] && return 0
-  if out=$("${SSH_SRV[@]}" -i /etc/vampn/users.key root@10.77.0.1 < "$f" 2>&1); then
+  if out=$("${SSH_SRV[@]}" -i /etc/vampn/users.key root@$SRV_TIP < "$f" 2>&1); then
     put users_pushed "$sum"
     log "список пользователей применён${out:+: $(tr '\n' ';' <<<"$out")}"
     changes=$(grep -E '^[-+~!]|users.conf' <<<"$out" | sed -e 's/^+ /добавлен /' -e 's/^- /удалён /' -e 's/^~ /сменена почта /' | tr '\n' ';' | sed 's/;$//; s/;/; /g')
@@ -1082,6 +1164,7 @@ mail_from_mirror() { # IP - разослать ключи с новым адре
 
 # ---------- аварийный режим (Бостон) ----------
 EM_ENV=/etc/vampn/emergency.env
+(( CELL > 1 )) && EM_ENV=/nonexistent   # аварийный канал (Бостон) только у ячейки 1
 EM_IFACE=vampn-e
 em_active() { [[ -f $STATE/emergency_on ]]; }
 em_init() { [[ -f $EM_ENV ]] || die "нет $EM_ENV"; set -a; . "$EM_ENV"; set +a; : "${EM_HOST:?нет EM_HOST в $EM_ENV}"; }
@@ -1135,7 +1218,7 @@ emergency_off() { # [--quiet]
   em_init
   em_active || { echo "аварийный режим не включён"; return 0; }
   log "аварийный режим: выключаю"
-  ip route replace 10.77.0.1/32 dev "$IFACE"
+  ip route replace "$SRV_TIP/32" dev "$IFACE"
   systemctl stop "awg-quick@$EM_IFACE" 2>/dev/null || true
   em_ssh off >/dev/null 2>&1 || log "Бостон не ответил на off - VPN там выключится сам при следующей проверке"
   rm -f "$STATE/emergency_on" "$STATE/down_since" "$STATE"/once_* "$STATE/rotated_in_outage"
@@ -1163,11 +1246,11 @@ emergency_status() {
 # Первые ATT_FAST попыток - раз в ROTATE_RETRY с, дальше реже (ROTATE_RETRY_SLOW), всего не больше ATT_MAX.
 # Аварийный канал (Бостон) включается отдельно, через EM_AT мин без связи, и на попытки не влияет.
 
-PROBE_IFACE=vampn-t
+PROBE_IFACE=vampn-t$( (( CELL > 1 )) && echo "$CELL" )
 probe_handshake() { # IP СЕК - отвечает ли VPN-сервер на этом адресе: временный интерфейс с тем же ключом, рабочий туннель не трогаем. 0 - рукопожатие есть
   local ip=$1 secs=$2 conf=/etc/amnezia/amneziawg/$PROBE_IFACE.conf end h p ok=1
   p=$(tun_port)
-  sed -E -e "s|^Endpoint *=.*|Endpoint = $ip:$p|" -e 's|^Address *=.*|Address = 10.77.0.3/32|' \
+  sed -E -e "s|^Endpoint *=.*|Endpoint = $ip:$p|" -e "s|^Address *=.*|Address = $HOME_TIP/32|" \
          -e '/^(DNS|PostUp|PostDown|PreUp|PreDown|PersistentKeepalive|Table)/d' "$TUN_CONF" > "$conf"
   # Table = off: маршрутов не добавляем, рабочий туннель не затрагивается; keepalive 1 с - рукопожатие стартует само, без трафика через маршруты
   sed -i -e '/^\[Interface\]/a Table = off' -e '/^\[Peer\]/a PersistentKeepalive = 1' "$conf"; chmod 600 "$conf"
@@ -1349,7 +1432,7 @@ deploy_scripts() { # [force] - отправить скрипт тем, у ког
   fi
   if [[ $(get "deployed_srv_$a" none) != "$h" ]] && (( t - $(get deploy_try_srv 0) >= DEPLOY_EVERY )) && alive; then
     put deploy_try_srv "$t"
-    if out=$("${SSH_SRV[@]}" -i /etc/vampn/users.key root@10.77.0.1 selfupdate < "$SELF" 2>&1); then
+    if out=$("${SSH_SRV[@]}" -i /etc/vampn/users.key root@$SRV_TIP selfupdate < "$SELF" 2>&1); then
       put "deployed_srv_$a" "$h"; log "VPN-сервер ($(tw_label)): скрипт обновлён ($out)"
     else
       log "VPN-сервер ($(tw_label)): скрипт не обновлён: $(tail -c 150 <<<"$out")"
@@ -1446,7 +1529,7 @@ status() {
 # Журнал $STATE/mail-status.tsv пишет почтовая часть: время, имя, адрес, вид (key|notice), ok|fail, подробности.
 # ok значит «SMTP-сервер принял письмо»; дошло ли оно до ящика, он не сообщает (письмо могло уйти в спам).
 MAILLOG=$STATE/mail-status.tsv
-USERS_CONF=/etc/vampn/users.conf
+USERS_CONF=/etc/vampn/users.conf   # на деле его выставляет users_conf_file (файл ячейки)
 MAIL_RETRY_AFTER=600     # повтор неудачной отправки не раньше, чем через 10 мин
 MAIL_RETRY_MAX=3         # сколько раз сторож сам пробует ещё
 
@@ -1495,6 +1578,7 @@ resend_all() {    # vampn resendall: текущий ключ всем из users
   local mep tep; mep=$(cat "$MIRROR/endpoint" 2>/dev/null); tep=$(tun_endpoint)
   [[ $mep == "$tep" ]] || die "адрес в копии данных ($mep) не совпал с туннелем ($tep): ключи с неверным адресом не рассылаю (vampn status)"
   local -a todo=() bad=()
+  USERS_CONF=$(users_conf_file) || die "нет /etc/vampn/users.conf"
   mapfile -t todo < <(awk '!/^[[:space:]]*#/ && NF>=2 {print $1}' "$USERS_CONF")
   local total=${#todo[@]} ok=0 n pass
   (( total )) || die "в $USERS_CONF нет пользователей"
@@ -1532,6 +1616,7 @@ key_local() {     # link|conf ИМЯ - из копии данных на homeser
 
 mailstatus() {    # vampn mailstatus: по каждому из users.conf - последняя отправка ключа
   local n em last ts st det bad=0 line
+  USERS_CONF=$(users_conf_file) || die "нет /etc/vampn/users.conf"
   printf '%-14s %-34s %-12s %s\n' ИМЯ ПОЧТА ПОСЛЕДНЯЯ ИТОГ
   while read -r n em _; do
     [[ -z $n || $n == \#* ]] && continue
@@ -1571,13 +1656,14 @@ home_main() {
     mirror) pull_mirror && echo "ok: $(ls "$MIRROR"/clients/*.env | wc -l) пользователей" ;;
     users)  push_users force ;;
     emergency)
+      (( CELL > 1 )) && die "аварийный канал (Бостон) есть только у ячейки 1"
       case ${2:-status} in
         on)     emergency_on "${3:-}" ;;
         off)    emergency_off "${3:-}" ;;
         status) emergency_status ;;
         *)      die "vampn emergency on|off|status" ;;
       esac ;;
-    list|server|reissue|resend|link)
+    list|server|snapshot|reissue|resend|link)
       em_active && die "сейчас аварийный режим: основной сервер недоступен, эта команда работает с ним"
       home_remote "$@" ;;
     *) echo "vampn: неизвестная команда «$cmd»" >&2; usage 1 ;;
@@ -1604,6 +1690,7 @@ home_remote() {
   case $cmd in
     list)   remote list ;;
     server) remote status ;;
+    snapshot) remote snapshot ;;
     link)   [[ ${2:-} =~ ^[a-zA-Z0-9_.-]{1,32}$ ]] || die "нужно имя пользователя: vampn link ИМЯ"
             key_local link "$2" || remote "link $2" ;;
     reissue|resend)
