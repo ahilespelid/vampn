@@ -1579,14 +1579,17 @@ status() {
 # ---------- надёжность рассылки ключей ----------
 # Журнал $STATE/mail-status.tsv пишет почтовая часть: время, имя, адрес, вид (key|notice), ok|fail, подробности.
 # ok значит «SMTP-сервер принял письмо»; дошло ли оно до ящика, он не сообщает (письмо могло уйти в спам).
-MAILLOG=$STATE/mail-status.tsv
+MAILLOG=${VAMPN_STATE:-/var/lib/vampn}/mail-status.tsv   # журнал один на все ячейки: так его пишет почтовая часть (STATE_DIR), в том числе письма от серверов через homeserv
 USERS_CONF=/etc/vampn/users.conf   # на деле его выставляет users_conf_file (файл ячейки)
 MAIL_RETRY_AFTER=600     # повтор неудачной отправки не раньше, чем через 10 мин
 MAIL_RETRY_MAX=3         # сколько раз сторож сам пробует ещё
 
-mail_failed() {   # у кого ПОСЛЕДНЯЯ отправка ключа не удалась: имя<TAB>время<TAB>подробности
+mail_failed() {   # у кого ПОСЛЕДНЯЯ отправка ключа не удалась (только у пользователей этой ячейки): имя<TAB>время<TAB>подробности
   [[ -s $MAILLOG ]] || return 0
-  awk -F'\t' '$4=="key" && $2!="" {s[$2]=$5; t[$2]=$1; d[$2]=$6} END{for(n in s) if(s[n]=="fail") print n "\t" t[n] "\t" d[n]}' "$MAILLOG" | sort
+  local uf=/dev/null; uf=$(users_conf_file 2>/dev/null) || uf=/dev/null
+  awk -F'\t' -v have_users="$([[ $uf != /dev/null && -s $uf ]] && echo 1 || echo 0)" 'FILENAME == ARGV[1] { split($0, f, " "); if (f[1] != "") mine[f[1]] = 1; next }
+    $4=="key" && $2!="" {s[$2]=$5; t[$2]=$1; d[$2]=$6}
+    END{for(n in s) if(s[n]=="fail" && (!have_users || (n in mine))) print n "\t" t[n] "\t" d[n]}' "$uf" "$MAILLOG" | sort
 }
 
 mail_watch() {    # сторож: неудачные письма с ключом повторяет сам, один раз сообщает в Telegram
@@ -1677,7 +1680,7 @@ mailstatus() {    # vampn mailstatus: по каждому из users.conf (вс�
   printf '%-14s %-7s %-34s %-12s %s\n' ИМЯ ЯЧЕЙКА ПОЧТА ПОСЛЕДНЯЯ ИТОГ
   while read -r n em c; do
     [[ -z $n ]] && continue
-    last=$(awk -F'\t' -v n="$n" '$4=="key" && $2==n {l=$0} END{print l}' "$(cell_state "$c")/mail-status.tsv" 2>/dev/null)
+    last=$(awk -F'\t' -v n="$n" '$4=="key" && $2==n {l=$0} END{print l}' "$(cell_state 1)/mail-status.tsv" 2>/dev/null)
     if [[ -z $last ]]; then printf '%-14s %-7s %-34s %-12s %s\n' "$n" "$c" "$em" - "нет записи (письмо ушло до журнала)"; continue; fi
     IFS=$'\t' read -r ts _ _ _ st det <<<"$last"
     if [[ $st == ok ]]; then line="принято почтовым сервером"; else line="НЕ УШЛО: $det"; bad=$(( bad + 1 )); fi

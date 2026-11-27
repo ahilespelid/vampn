@@ -1127,7 +1127,8 @@ case $1 in
       3:d) echo "FAIL d relay failed: Permission denied" >&2; exit 1 ;;
       *) echo "vampn: нет пользователя $n" >&2; exit 1 ;;
     esac ;;
-  users|mirror|resendall) echo "готово $1" ;;
+  users) [[ ${MCFAIL:-} == "$cell" ]] && { echo "ячейка молчит" >&2; exit 1; }; echo "готово $1" ;;
+  mirror|resendall) echo "готово $1" ;;
 esac
 MCEOF
 sed -i "s|@CALLS@|$MC/calls|" "$MC/fakeself"; chmod +x "$MC/fakeself"; : > "$MC/calls"
@@ -1161,6 +1162,33 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\n' 1000 f f@x.ru key fail "SMTP: отказ" >> "
 m_out=$(mailstatus 2>&1); m_rc=$?
 ok "mailstatus: пользователь ячейки 2 читается из журнала ячейки 2 и показан с номером ячейки" '[[ $m_rc == 1 && $m_out =~ f[[:space:]]+2[[:space:]]+f@x.ru && $m_out == *"НЕ УШЛО: SMTP: отказ"* && $m_out =~ a[[:space:]]+1[[:space:]]+a@x.ru ]]'
 unset VAMPN_CELLS_STATE
+# -- move: принудительный перенос пользователей в другую ячейку
+printf '# все\na a@x.ru\nf f@x.ru 2\nz z@x.ru 2\nd d@x.ru 3\ng g@x.ru 4\n' > "$S/users.conf"; rm -f "$S"/users.conf.bak.*; : > "$MC/calls"
+m_out=$(SELF=$MC/fakeself move_main f 3 2>&1); m_rc=$?
+ok "move: f переехал из ячейки 2 в 3, остальные строки и комментарий на месте, копия списка сохранена" '[[ $m_rc == 0 ]] && grep -qx "f f@x.ru 3" $S/users.conf && grep -qx "z z@x.ru 2" $S/users.conf && grep -qx "a a@x.ru" $S/users.conf && grep -qx "# все" $S/users.conf && ls $S/users.conf.bak.* >/dev/null 2>&1 && [[ $m_out == *"f: ячейка 2 -> 3"* ]]'
+ok "move: сначала применена новая ячейка (3), потом старая (2); остальные не тронуты" '[[ $(grep -n "cell=3 users" $MC/calls | head -1 | cut -d: -f1) -lt $(grep -n "cell=2 users" $MC/calls | head -1 | cut -d: -f1) ]] && ! grep -q "cell=1 users" $MC/calls'
+cp "$S/users.conf" "$MC/users.before"; : > "$MC/calls"
+m_out=$(SELF=$MC/fakeself move_main f 3 2>&1)
+ok "move: уже в этой ячейке - переносить некого, ничего не применяется" '[[ $m_out == *"уже в ячейке 3"* && $m_out == *"переносить некого"* ]] && ! grep -q users $MC/calls && cmp -s $S/users.conf $MC/users.before'
+m_out=$(SELF=$MC/fakeself move_main a 4 2>&1); m_rc=$?
+ok "move: ячейка не «активна» - отказ, список не меняется" '[[ $m_rc != 0 && $m_out == *"не активна"* ]] && cmp -s $S/users.conf $MC/users.before'
+m_out=$(SELF=$MC/fakeself move_main client1 3 2>&1); m_rc=$?
+ok "move: пользователя нет в users.conf (завели на сервере) - отказ с объяснением" '[[ $m_rc != 0 && $m_out == *"client1 нет в"* ]] && cmp -s $S/users.conf $MC/users.before'
+m_out=$(SELF=$MC/fakeself move_main a 9 2>&1); m_rc=$?
+ok "move: нет такой ячейки, плохие параметры - отказ" '[[ $m_rc != 0 ]] && ! (SELF=$MC/fakeself move_main a) >/dev/null 2>&1 && ! (SELF=$MC/fakeself move_main a x) >/dev/null 2>&1 && ! (SELF=$MC/fakeself move_main "a b" 3) >/dev/null 2>&1'
+sed -i 's/^CELL_LIMIT=.*/CELL_LIMIT=2/' "$CELLS_DIR/3.env"
+m_out=$(SELF=$MC/fakeself move_main a z 3 2>&1); m_rc=$?
+ok "move: в ячейке 3 лимит 2, там уже f и d - перенос отказан, список не меняется" '[[ $m_rc != 0 && $m_out == *"не хватит места"* ]] && cmp -s $S/users.conf $MC/users.before'
+sed -i 's/^CELL_LIMIT=.*/CELL_LIMIT=1000/' "$CELLS_DIR/3.env"; : > "$MC/calls"
+m_out=$(SELF=$MC/fakeself move_main a z a 2 2>&1); m_rc=$?
+ok "move: несколько имён (повтор игнорируется): a (из 1) и z (уже в 2) - переехал только a, применены ячейки 2 и 1" '[[ $m_rc == 0 ]] && grep -qx "a a@x.ru 2" $S/users.conf && grep -qx "z z@x.ru 2" $S/users.conf && grep -q "cell=2 users" $MC/calls && grep -q "cell=1 users" $MC/calls && [[ $m_out == *"перенесено: 1"* ]]'
+cp "$S/users.conf" "$MC/users.before"; : > "$MC/calls"
+m_out2=$(MCFAIL=2 SELF=$MC/fakeself move_main d 2 2>&1); m_rc2=$?
+ok_keep=$(cmp -s $S/users.conf $MC/users.before && echo yes)
+m_out=$(MCFAIL=3 SELF=$MC/fakeself move_main d 2 2>&1); m_rc=$?
+ok "move: новая ячейка не ответила - users.conf возвращён, ничего не изменено" '[[ $m_rc2 != 0 && $m_out2 == *"не приняла список"* && $ok_keep == yes ]]'
+ok "move: старая ячейка не ответила - перенос состоялся, об этом честно сказано (уберётся сама)" '[[ $m_rc == 0 && $m_out == *"убрать сейчас не вышло"* ]] && grep -qx "d d@x.ru 2" $S/users.conf'
+
 # -- resend/reissue с homeserv: успех команды на сервере - код 0 (раньше resend возвращал 1 после «sent»)
 ( eval "$(sed -n '/^home_remote()/,/^}/p' "$FILE")"
   remote() { echo "remote $1" >> "$MC/calls"; return "${REMOTE_RC:-0}"; }; pull_mirror() { echo pull >> "$MC/calls"; }; key_local() { return 1; }
