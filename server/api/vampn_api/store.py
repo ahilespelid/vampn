@@ -225,3 +225,39 @@ class MySQLStore:
     def query_metrics(self, server, metric, since, limit=2000):
         return self._all("SELECT ts,value,labels FROM metrics WHERE server=%s AND metric=%s AND ts>=%s ORDER BY ts LIMIT %s",
                          (server, metric, since, limit))
+
+    # ---------- статистика по ключам (пишет vampn-metrics, здесь только чтение) ----------
+    def key_stats_list(self, names=None):
+        """Итоги по ключам: все (names=None) или только перечисленные."""
+        cols = ("key_name,up_total,down_total,connections,tracked_since,first_seen_at,last_seen_at,"
+                "last_client_ip,last_server,last_server_ip")
+        if names is None:
+            return self._all("SELECT " + cols + " FROM key_stats ORDER BY key_name")
+        if not names:
+            return []
+        return self._all("SELECT " + cols + " FROM key_stats WHERE key_name IN (" + _in(len(names)) + ") ORDER BY key_name",
+                         tuple(names))
+
+    def key_traffic_sums(self, names, since):
+        """{ключ: (отдал, скачал)} в байтах за часы не раньше `since`; names=None - по всем ключам."""
+        if names is not None and not names:
+            return {}
+        where, args = ("", (since,)) if names is None else (" AND key_name IN (" + _in(len(names)) + ")", (since, *names))
+        rows = self._all("SELECT key_name, SUM(up_bytes) AS up, SUM(down_bytes) AS down FROM key_traffic "
+                         "WHERE hour>=%s" + where + " GROUP BY key_name", args)
+        return {r["key_name"]: (int(r["up"]), int(r["down"])) for r in rows}
+
+    def key_traffic_daily(self, name, since):
+        return self._all("SELECT DATE(hour) AS day, SUM(up_bytes) AS up, SUM(down_bytes) AS down FROM key_traffic "
+                         "WHERE key_name=%s AND hour>=%s GROUP BY DATE(hour) ORDER BY day", (name, since))
+
+    def key_client_ips(self, name, limit=20):
+        """С каких IP подключался ключ: сколько подключений и когда последний раз (подключение или переезд на этот IP)."""
+        return self._all("SELECT new_value AS ip, SUM(kind='connect') AS connects, MAX(ts) AS last_at FROM key_events "
+                         "WHERE key_name=%s AND kind IN ('connect','client_ip') AND new_value IS NOT NULL "
+                         "GROUP BY new_value ORDER BY last_at DESC LIMIT %s", (name, limit))
+
+    def key_events_list(self, name, limit=50):
+        """События ключа и общие события сервера (key_name IS NULL: смена IP или сервера), новые первыми."""
+        return self._all("SELECT id,ts,key_name,kind,old_value,new_value,server,server_ip FROM key_events "
+                         "WHERE key_name=%s OR key_name IS NULL ORDER BY ts DESC, id DESC LIMIT %s", (name, limit))

@@ -7,13 +7,14 @@
 #
 #   install.sh --net 10.77.4 --payload DIR --key-root 'ssh-ed25519 ...' --key-users '...' --key-mirror '...'
 #              [--public-ip IP] [--span 4] [--limit 1000] [--port N] [--home-public-ip IP] [--admin-key '...']... [--no-game] [--name vampn_2]
+#              [--packages-only]                 только поставить пакеты, модуль AmneziaWG и утилиты awg (так работает `vampn init`)
 #              [--render-only --root DIR]        только записать файлы в DIR (для проверки), ничего не ставить и не запускать
 #   В DIR (--payload): vampn (скрипт), amnezia.gpg (ключ PPA), secrets.env (почта через homeserv: MAIL_METHOD=relay ...), необязательно.
 # В конце печатает строки "VAMPN_*=..." (порт, публичный ключ сервера, ключ для почты) - их читает spawn.
 set -euo pipefail
 
 TOOLS_TAG=v3.1.20260812 TOOLS_COMMIT=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843   # amnezia-vpn/amneziawg-tools, как на рабочих серверах
-NET="" SPAN=4 LIMIT=1000 PORT="" PUBLIC_IP="" HOME_PUB_IP="" PAYLOAD="" NAME="" GAME=1 RENDER_ONLY=0 ROOT=""
+NET="" SPAN=4 LIMIT=1000 PORT="" PUBLIC_IP="" HOME_PUB_IP="" PAYLOAD="" NAME="" GAME=1 RENDER_ONLY=0 ROOT="" PACKAGES_ONLY=0
 KEY_ROOT="" KEY_USERS="" KEY_MIRROR="" ADMIN_KEYS=()
 say() { echo "[install] $*" >&2; }
 die() { echo "install.sh: $*" >&2; exit 1; }
@@ -26,6 +27,7 @@ while (( $# )); do
     --key-root) KEY_ROOT=$2; shift 2 ;;  --key-users) KEY_USERS=$2; shift 2 ;; --key-mirror) KEY_MIRROR=$2; shift 2 ;;
     --admin-key) ADMIN_KEYS+=("$2"); shift 2 ;;
     --no-game) GAME=0; shift ;;
+    --packages-only) PACKAGES_ONLY=1; shift ;;
     --render-only) RENDER_ONLY=1; shift ;; --root) ROOT=${2%/}; shift 2 ;;
     -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) die "неизвестный параметр $1" ;;
@@ -33,6 +35,7 @@ while (( $# )); do
 done
 
 # ---------- проверка входных данных ----------
+if (( PACKAGES_ONLY )); then [[ $EUID == 0 ]] || die "нужен root"; ROOT=""; else
 [[ $NET =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || die "--net: три октета, например 10.77.4"
 [[ $SPAN =~ ^[1-4]$ ]] || die "--span: от 1 до 4 подряд идущих /24"
 [[ $LIMIT =~ ^[0-9]+$ ]] || die "--limit: число"
@@ -49,6 +52,7 @@ HOME_TIP=$NET.3 SRV_TIP=$NET.1
 case $SPAN in 1) CIDR=24 ;; 2) CIDR=23 ;; *) CIDR=22; SPAN=4 ;; esac   # три /24 подряд в одну маску не уложить - берём /22 (третий октет сети кратен числу /24)
 (( ${NET##*.} % SPAN == 0 )) || die "--net: третий октет ${NET##*.} не кратен $SPAN (сеть /$CIDR должна начинаться на границе)"
 D=$ROOT/etc/amnezia/amneziawg V=$ROOT/root/vampn
+fi
 
 # ---------- что записать: функции без побочных эффектов, кроме файлов ----------
 rnd() { shuf -i "$1-$2" -n 1; }
@@ -236,14 +240,23 @@ EOF
 install_packages() {
   say "пакеты"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get install -y -qq curl jq nftables python3 ca-certificates gnupg git make gcc build-essential dkms perl \
+  # у новых серверов Timeweb сеть бывает с потерями: apt сам повторяет загрузки
+  local -a APT=(apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+  "${APT[@]}" update -qq
+  "${APT[@]}" install -y -qq curl jq nftables python3 ca-certificates gnupg git make gcc build-essential dkms perl \
       "linux-headers-$(uname -r)" openssh-server unattended-upgrades systemd-timesyncd traceroute qrencode >/dev/null
   if [[ -f $PAYLOAD/amnezia.gpg ]]; then install -m 644 "$PAYLOAD/amnezia.gpg" /usr/share/keyrings/amnezia.gpg
-  else [[ -s /usr/share/keyrings/amnezia.gpg ]] || die "нет ключа PPA Amnezia: положите amnezia.gpg в --payload"; fi
+  elif [[ ! -s /usr/share/keyrings/amnezia.gpg ]]; then
+    # на чистом сервере ключа ещё нет (его кладёт spawn): пробуем взять с сервера ключей Ubuntu
+    local g; g=$(mktemp -d); chmod 700 "$g"
+    GNUPGHOME=$g gpg -q --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys 75C9DD72C799870E310542E24166F2C257290828 >/dev/null 2>&1 \
+      && GNUPGHOME=$g gpg -q --batch --export 75C9DD72C799870E310542E24166F2C257290828 > /usr/share/keyrings/amnezia.gpg 2>/dev/null || true
+    rm -rf "$g"
+    [[ -s /usr/share/keyrings/amnezia.gpg ]] || die "нет ключа PPA Amnezia: положите amnezia.gpg в /usr/share/keyrings или в --payload"
+  fi
   echo 'deb [signed-by=/usr/share/keyrings/amnezia.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu noble main' > /etc/apt/sources.list.d/amnezia.list
-  apt-get update -qq
-  apt-get install -y -qq amneziawg-dkms >/dev/null
+  "${APT[@]}" update -qq
+  "${APT[@]}" install -y -qq amneziawg-dkms >/dev/null
   modprobe amneziawg 2>/dev/null || dkms autoinstall >/dev/null 2>&1 || true
   modprobe amneziawg || die "модуль amneziawg не загрузился (dkms status: $(dkms status 2>&1 | head -2 | tr '\n' ' '))"
 }
@@ -252,7 +265,10 @@ install_tools() {
   if command -v awg >/dev/null && awg --version 2>&1 | grep -q "${TOOLS_TAG#v}"; then say "утилиты awg уже стоят"; return 0; fi
   say "утилиты awg ($TOOLS_TAG)"
   local src=/usr/local/src/amneziawg-tools
-  [[ -d $src/.git ]] || git clone -q https://github.com/amnezia-vpn/amneziawg-tools "$src"
+  if [[ ! -d $src/.git ]]; then
+    local t; for t in 1 2 3 4 5; do rm -rf "$src"; git clone -q https://github.com/amnezia-vpn/amneziawg-tools "$src" && break; sleep 5; done
+    [[ -d $src/.git ]] || die "не удалось скачать amneziawg-tools с GitHub"
+  fi
   git -C "$src" fetch -q --tags origin 2>/dev/null || true
   git -C "$src" checkout -q "$TOOLS_COMMIT"
   make -C "$src/src" -j2 >/dev/null
@@ -290,9 +306,10 @@ if (( RENDER_ONLY )); then
 fi
 install_packages
 install_tools
+if (( PACKAGES_ONLY )); then say "пакеты и утилиты awg готовы"; echo "VAMPN_INIT_OK=1"; exit 0; fi
 write_awg; write_sysctl; write_nft; write_ssh; write_units
 activate
-"/usr/local/sbin/vampn" home-init >/dev/null     # создаёт пира homeserv (адрес $NET.3); его конфиг homeserv заберёт командой `vampn home-conf`
+"/usr/local/sbin/vampn" homeinit >/dev/null     # создаёт пира homeserv (адрес $NET.3); его конфиг homeserv заберёт командой `vampn homeconf`
 verify
 echo "VAMPN_PORT=$(awk -F' *= *' '/^ListenPort/{print $2; exit}' "$D/awg0.conf")"
 echo "VAMPN_SERVER_PUBKEY=$(sed -n 's/^SERVER_PUBKEY=//p' "$V/server.env")"

@@ -10,8 +10,8 @@
   `POST /v1/auth/verify {email, code, device?}` выдаёт токен сессии (30 дней). Код живёт 10 минут, 6 попыток, затем блокировка почты на час.
   Не более 3 кодов в час на почту (в том числе на неизвестную, чтобы нельзя было узнать, есть ли почта). Отдельный лимит по IP.
 - **Почта = учётки.** Под одной почтой может быть несколько имён (`mio`, `andrey`): после входа доступны ключи всех активных имён с этой почтой.
-- **Роли.** `admin` (суперадмин): список и добавление пользователей, `rotate --force`, `emergency on/off`, история всех ключей.
-  `user`: статус, `rotate`, `reboot`, свои ключи и уведомления.
+- **Роли.** `admin` (суперадмин): список и добавление пользователей, `rotate --force`, выбор кабинета Timeweb (`rotate` на выбранном кабинете, `use`),
+  `emergency on/off`, история всех ключей. `user`: статус, `rotate` на активном кабинете, `reboot`, свои ключи и уведомления.
 - **Ключи.** Новый ключ рассылает сам `vampn` на почту. При отправке каждого письма с ключом (смена IP, перевыпуск, новый пользователь,
   повтор) `vampn` сам записывает выдачу (`keys`) и уведомление (`notifications`: почта, push, доставлено, прочитано) в базу, см. `../vampn/README.md`.
   Перевыпуск из приложения (`POST /keys/{name}/reissue`) не создаёт второе: если уведомление уже есть (не старше 2 минут), берётся оно, и для него отправляется push.
@@ -27,13 +27,19 @@
 | `POST /auth/request`, `POST /auth/verify` | все | вход по коду |
 | `POST /auth/logout`, `GET /me`, `POST /devices` | вошедшие | сессия, учётки, push-токен |
 | `GET /status`, `GET /server`, `GET /stats` | вошедшие | статус сторожа/сервера VPN, метрики |
-| `POST /control/rotate`, `POST /control/reboot` | вошедшие (`force` только admin) | смена IP, перезагрузка |
+| `GET /stats/keys`, `GET /stats/keys/{name}` | свои ключи (admin все, в том числе удалённые) | статистика по ключам: МБ за сутки/неделю/месяц и всего, подключения, IP клиента и сервера, события; данные пишет `../metrics` |
+| `POST /control/rotate {force?, server?}`, `POST /control/reboot` | вошедшие (`force` и `server` только admin) | смена IP (`server`: 1 основной, 2 запасной кабинет Timeweb; без него активный), перезагрузка |
+| `POST /control/use {server}` | admin | перевести туннель на кабинет 1 или 2 (`vampn use`): IP не меняется, ключи не рассылаются |
 | `POST /control/emergency` | `status` всем, `on/off` admin | аварийный канал |
 | `GET /keys`, `POST /keys/{name}/link\|resend\|reissue` | свои (admin любые) | ключи и история; `link` отдаёт ключ-токен `vpn://` и `.conf` для QR |
 | `POST /admin/keys/resendall`, `GET /admin/mail-status` | admin | разослать ключ всем заново; кому и когда ушёл ключ |
 | `GET /notifications`, `POST /notifications/{id}/delivered\|read` | вошедшие | уведомления |
 | `GET /notifications/stream` | вошедшие | живой поток уведомлений (SSE), см. ниже |
 | `GET /admin/users`, `GET /admin/events`, `POST /admin/users`, `PATCH /admin/users/{name}` | admin | пользователи и история |
+| `GET /admin/cells` | admin | ячейки (серверы): номер, имя, IP, пользователей/лимит, рукопожатие, состояние (`vampn cells`) |
+| `GET /admin/timeweb/accounts`, `POST /admin/timeweb/accounts {name, token}`, `POST /admin/timeweb/accounts/{name}/default`, `DELETE /admin/timeweb/accounts/{name}` | admin | кабинеты Timeweb. Токен уходит в `vampn account add` только через stdin (ни в argv, ни в журнал, ни в ответ), хранится на homeserv (`/etc/vampn/accounts`, права 600). `main` и `spare` удалить нельзя |
+| `POST /admin/spawn {account?}`, `GET /admin/spawn` | admin | арендовать сервер `vampn_N` (Timeweb, Амстердам, самый дешёвый тариф, Debian) и развернуть ячейку; идёт в фоне, ход: `state` queued/running/done/failed/none, `detail`, `log`. **Тратит деньги**, ограничений по сумме нет (так решено) |
+| `POST /admin/cells/{n}/delete {confirm: true}` | admin | удалить ячейку n (2..30) и её сервер в Timeweb; пока в ячейке есть пользователи, vampn откажет |
 
 Ошибки: JSON `{"error": "...", "message": "..."}`; блокировка: `429` и заголовок `Retry-After`.
 

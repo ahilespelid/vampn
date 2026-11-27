@@ -78,6 +78,12 @@ Cmnd_Alias VAMPN_API = /usr/local/sbin/vampn status, \
                        /usr/local/sbin/vampn list, \
                        /usr/local/sbin/vampn rotate, \
                        /usr/local/sbin/vampn rotate --force, \
+                       /usr/local/sbin/vampn rotate 1, \
+                       /usr/local/sbin/vampn rotate 2, \
+                       /usr/local/sbin/vampn rotate --force 1, \
+                       /usr/local/sbin/vampn rotate --force 2, \
+                       /usr/local/sbin/vampn use 1, \
+                       /usr/local/sbin/vampn use 2, \
                        /usr/local/sbin/vampn reboot, \
                        /usr/local/sbin/vampn reboot hard, \
                        /usr/local/sbin/vampn emergency on, \

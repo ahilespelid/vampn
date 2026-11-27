@@ -20,6 +20,7 @@ class FakeStore:
     def __init__(self):
         self.users, self.events, self.codes, self.locks = [], [], [], {}
         self.sessions, self.devices, self.keys, self.notifs, self.metrics = [], [], [], [], []
+        self.key_stats, self.key_traffic, self.key_events = {}, [], []
         self._id = 0
 
     def _next(self):
@@ -185,6 +186,39 @@ class FakeStore:
     def query_metrics(self, server, metric, since, limit=2000):
         return [m for m in self.metrics if m["server"] == server and m["metric"] == metric and m["ts"] >= since]
 
+    # статистика по ключам: тесты кладут данные прямо в key_stats (имя -> строка), key_traffic и key_events (списки)
+    def key_stats_list(self, names=None):
+        return [dict(r) for n, r in sorted(self.key_stats.items()) if names is None or n in names]
+
+    def key_traffic_sums(self, names, since):
+        out = {}
+        for t in self.key_traffic:
+            if t["hour"] >= since and (names is None or t["key_name"] in names):
+                up, down = out.get(t["key_name"], (0, 0))
+                out[t["key_name"]] = (up + t["up_bytes"], down + t["down_bytes"])
+        return out
+
+    def key_traffic_daily(self, name, since):
+        days = {}
+        for t in self.key_traffic:
+            if t["key_name"] == name and t["hour"] >= since:
+                up, down = days.get(t["hour"].date(), (0, 0))
+                days[t["hour"].date()] = (up + t["up_bytes"], down + t["down_bytes"])
+        return [dict(day=d, up=u, down=w) for d, (u, w) in sorted(days.items())]
+
+    def key_client_ips(self, name, limit=20):
+        ips = {}
+        for e in self.key_events:
+            if e["key_name"] == name and e["kind"] in ("connect", "client_ip") and e["new_value"] is not None:
+                n, last = ips.get(e["new_value"], (0, e["ts"]))
+                ips[e["new_value"]] = (n + (1 if e["kind"] == "connect" else 0), max(last, e["ts"]))
+        rows = [dict(ip=ip, connects=n, last_at=last) for ip, (n, last) in ips.items()]
+        return sorted(rows, key=lambda r: r["last_at"], reverse=True)[:limit]
+
+    def key_events_list(self, name, limit=50):
+        rows = [e for e in self.key_events if e["key_name"] in (name, None)]
+        return sorted(rows, key=lambda e: (e["ts"], e["id"]), reverse=True)[:limit]
+
 
 class FakeMailer:
     def __init__(self):
@@ -201,20 +235,26 @@ class FakeMailer:
 class FakeRunner:
     def __init__(self):
         self.calls = []
-        self.outputs = {"link": "vpn://TESTLINK", "keyconf": "[Interface]\nPrivateKey = TEST\n"}
+        self.outputs = {"link": "vpn://TESTLINK", "keyconf": "[Interface]\nPrivateKey = TEST\n",
+                        "cells": "ЯЧЕЙКА\tИМЯ\tIP\tПОЛЬЗОВАТЕЛЕЙ\tЛИМИТ\tРУКОПОЖАТИЕ\tСОСТОЯНИЕ\n1\tvampn\t82.97.246.204\t18\t1000\t89s\tактивна\n2\tvampn_2\t203.0.113.9\t0\t1000\t-\tошибка\n",
+                        "account-list": "main\tok\t5081.8\tRUB\t1\t\nspare\tdenied\t\t\t0\tUnauthorized\n",
+                        "spawnstatus": "состояние: running: создание сервера vampn_3\n2026-11-27 11:00:01 ячейка 3\n2026-11-27 11:00:05 создание сервера vampn_3\n"}
         self.codes = {}
         self.fail = set()  # подкоманды, которые должны упасть
+        self.stdins = []   # (подкоманда, stdin): секреты не попадают в calls
 
-    def run_ok(self, sub, arg=""):
+    def run_ok(self, sub, arg="", stdin=""):
         build_argv(sub, arg)  # те же проверки, что в бою
         self.calls.append((sub, arg))
+        if stdin:
+            self.stdins.append((sub, stdin))
         if sub in self.fail:
             from vampn_api.errors import CommandFailed
             raise CommandFailed("тестовый сбой " + sub)
         return self.outputs.get(sub, "ok " + sub)
 
-    def run(self, sub, arg="", timeout=0):
-        return Result(self.codes.get(sub, 0), self.run_ok(sub, arg), "")
+    def run(self, sub, arg="", timeout=0, stdin=""):
+        return Result(self.codes.get(sub, 0), self.run_ok(sub, arg, stdin), "")
 
 
 class FakePush:

@@ -6,10 +6,10 @@ from fastapi import Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import commands, security
+from . import cells, commands, security
 from .auth_service import AuthService, Principal
 from .config import Settings, load_settings
-from .errors import ApiError, BadRequest, Conflict, Forbidden, NotFound
+from .errors import ApiError, BadRequest, CommandFailed, Conflict, Forbidden, NotFound
 from .mailer import NullPush, SmtpMailer
 from .store import MySQLStore, utcnow
 from .stream import notification_stream
@@ -47,14 +47,43 @@ class UserPatch(BaseModel):
 
 class RotateBody(BaseModel):
     force: bool = False
+    server: Optional[int] = Field(default=None, ge=1, le=2)  # кабинет Timeweb: 1 основной, 2 запасной; без него - активный
+
+
+class UseBody(BaseModel):
+    server: int = Field(ge=1, le=2)
 
 
 class RebootBody(BaseModel):
     hard: bool = False
 
 
+class AccountBody(BaseModel):
+    name: str = Field(max_length=24)
+    token: str = Field(max_length=4096, repr=False)  # токен API Timeweb: только в stdin vampn, в журнал не попадает
+
+
+class SpawnBody(BaseModel):
+    account: Optional[str] = Field(default=None, max_length=24)
+
+
+class CellDelBody(BaseModel):
+    confirm: bool = False
+
+
 class EmergencyBody(BaseModel):
     mode: str = Field(pattern="^(on|off|status)$")
+
+
+ONLINE_SECONDS = 180  # как в сборщике метрик: подключался за последние 3 минуты
+
+
+def iso(value):
+    return value.isoformat() + "Z" if value else None
+
+
+def hour_floor(value):
+    return value.replace(minute=0, second=0, microsecond=0)
 
 
 def client_ip(request: Request) -> str:
@@ -156,8 +185,18 @@ def create_app(settings: Optional[Settings] = None, store=None, mailer=None, run
     def rotate(body: RotateBody, p: Principal = Depends(current)):
         if body.force and not p.is_admin:
             raise Forbidden("--force только для суперадмина")
-        log.info("rotate force=%s by %s", body.force, p.email)
-        return {"text": runner.run_ok("rotate", "--force" if body.force else "")}
+        if body.server is not None and not p.is_admin:
+            raise Forbidden("выбор кабинета только для суперадмина")
+        arg = " ".join(x for x in ("--force" if body.force else "", str(body.server) if body.server else "") if x)
+        log.info("rotate force=%s server=%s by %s", body.force, body.server, p.email)
+        return {"text": runner.run_ok("rotate", arg)}
+
+    @app.post("/v1/control/use")
+    def use_server(body: UseBody, p: Principal = Depends(current)):
+        if not p.is_admin:
+            raise Forbidden("выбор кабинета только для суперадмина")
+        log.info("use server=%s by %s", body.server, p.email)
+        return {"text": runner.run_ok("use", str(body.server))}
 
     @app.post("/v1/control/reboot")
     def reboot(body: RebootBody, p: Principal = Depends(current)):
@@ -178,6 +217,73 @@ def create_app(settings: Optional[Settings] = None, store=None, mailer=None, run
         since = now_fn() - timedelta(hours=max(1, min(hours, 24 * 31)))
         rows = store.query_metrics(server, metric, since)
         return {"metric": metric, "points": [{"ts": r["ts"].isoformat() + "Z", "value": r["value"]} for r in rows]}
+
+    # ---------- статистика по ключам: свои ключи, у суперадмина все ----------
+    def key_view(name, user, st, sums, now):
+        """Один ключ для приложения. user - строка users (или None, если такого пользователя нет), st - строка key_stats."""
+        st = st or {}
+        seen = st.get("last_seen_at")
+        view = {
+            "name": name,
+            "role": user["role"] if user else None,
+            "active": bool(user["active"]) if user else None,
+            "added_at": iso(user["created_at"]) if user else None,
+            "removed_at": iso(user["revoked_at"]) if user and not user["active"] else None,
+            "removed_reason": user["revoked_reason"] if user and not user["active"] else None,
+            "tracked_since": iso(st.get("tracked_since")),
+            "first_seen_at": iso(st.get("first_seen_at")),
+            "last_seen_at": iso(seen),
+            "online": bool(seen) and 0 <= (now - seen).total_seconds() <= ONLINE_SECONDS,
+            "connections": int(st.get("connections") or 0),
+            "up_total": int(st.get("up_total") or 0),
+            "down_total": int(st.get("down_total") or 0),
+            "last_client_ip": st.get("last_client_ip"),
+            "last_server": st.get("last_server"),
+            "last_server_ip": st.get("last_server_ip"),
+        }
+        for label, days in (("24h", 1), ("7d", 7), ("30d", 30)):
+            up, down = sums[days].get(name, (0, 0))
+            view["up_" + label], view["down_" + label] = up, down
+        return view
+
+    def traffic_sums(names, now):
+        return {d: store.key_traffic_sums(names, hour_floor(now - timedelta(days=d))) for d in (1, 7, 30)}
+
+    @app.get("/v1/stats/keys")
+    def stats_keys(p: Principal = Depends(current)):
+        now = now_fn()
+        names = None if p.is_admin else [a["name"] for a in p.accounts]
+        users = {u["name"]: u for u in store.list_users()}
+        stats = {r["key_name"]: r for r in store.key_stats_list(names)}
+        wanted = set(stats) | (set(users) if names is None else set(names))
+        sums = traffic_sums(names, now)
+        keys = [key_view(n, users.get(n), stats.get(n), sums, now) for n in wanted]
+        keys.sort(key=lambda k: (-(k["up_total"] + k["down_total"]), k["name"]))
+        total = {f: sum(k[f] for k in keys) for f in ("connections", "up_total", "down_total", "up_24h", "down_24h",
+                                                       "up_7d", "down_7d", "up_30d", "down_30d")}
+        total.update(keys=len(keys), online=sum(1 for k in keys if k["online"]))
+        return {"generated_at": iso(now), "keys": keys, "totals": total}
+
+    @app.get("/v1/stats/keys/{name}")
+    def stats_key(name: str, p: Principal = Depends(current)):
+        if not security.valid_name(name):
+            raise BadRequest("плохое имя")
+        now = now_fn()
+        user = next((u for u in store.list_users() if u["name"] == name), None)
+        st = next(iter(store.key_stats_list([name])), None)
+        if name not in {a["name"] for a in p.accounts} and not (p.is_admin and (user or st)):
+            raise NotFound("нет такого ключа")  # чужой ключ и несуществующий неотличимы
+        view = key_view(name, user, st, traffic_sums([name], now), now)
+        view["days"] = [{"day": r["day"].isoformat(), "up": int(r["up"]), "down": int(r["down"])}
+                        for r in store.key_traffic_daily(name, hour_floor(now - timedelta(days=30)))]
+        view["client_ips"] = [{"ip": r["ip"], "connects": int(r["connects"] or 0), "last_at": iso(r["last_at"])}
+                              for r in store.key_client_ips(name)]
+        view["events"] = [{"at": iso(r["ts"]), "kind": r["kind"], "key": r["key_name"], "old": r["old_value"],
+                           "new": r["new_value"], "server": r["server"], "server_ip": r["server_ip"]}
+                          for r in store.key_events_list(name)]
+        view["issued"] = ([{"at": iso(k["issued_at"]), "reason": k["reason"]} for k in store.list_keys([user["id"]])]
+                          if user else [])
+        return view
 
     # ---------- ключи ----------
     @app.get("/v1/keys")
@@ -275,6 +381,62 @@ def create_app(settings: Optional[Settings] = None, store=None, mailer=None, run
     def admin_mail_status(_p: Principal = Depends(admin)):
         r = runner.run("mailstatus")  # код 1 = у кого-то отправка не удалась; это ответ, а не ошибка API
         return {"ok": r.code == 0, "text": r.out}
+
+    # ---------- суперадмин: ячейки (серверы) и аренда новых серверов в Timeweb ----------
+    @app.get("/v1/admin/cells")
+    def admin_cells(_p: Principal = Depends(admin)):
+        return {"cells": cells.parse_cells(runner.run_ok("cells"))}
+
+    @app.get("/v1/admin/timeweb/accounts")
+    def admin_accounts(_p: Principal = Depends(admin)):
+        r = runner.run("account-list", timeout=90)  # на каждый кабинет - запрос баланса в Timeweb
+        if r.code != 0:
+            raise CommandFailed((r.err or r.out or "vampn вернул ошибку").strip()[:500])
+        return {"accounts": cells.parse_accounts(r.out)}
+
+    @app.post("/v1/admin/timeweb/accounts")
+    def admin_account_add(body: AccountBody, p: Principal = Depends(admin)):
+        name, token = body.name.strip(), body.token.strip()
+        if not cells.ACCT_NAME.match(name) or name in cells.RESERVED:
+            raise BadRequest("имя кабинета: латиница в нижнем регистре, цифры, _ и -, до 24 знаков; main и spare заняты")
+        if not cells.TOKEN_RE.match(token):
+            raise BadRequest("это не похоже на токен API Timeweb")
+        log.info("timeweb account add name=%s by %s", name, p.email)
+        return {"ok": True, "text": runner.run_ok("account-add", name, stdin=token + "\n")}
+
+    @app.post("/v1/admin/timeweb/accounts/{name}/default")
+    def admin_account_default(name: str, p: Principal = Depends(admin)):
+        if not cells.ACCT_NAME.match(name):
+            raise BadRequest("плохое имя кабинета")
+        log.info("timeweb account default name=%s by %s", name, p.email)
+        return {"ok": True, "text": runner.run_ok("account-default", name)}
+
+    @app.delete("/v1/admin/timeweb/accounts/{name}")
+    def admin_account_del(name: str, p: Principal = Depends(admin)):
+        if not cells.ACCT_NAME.match(name) or name in cells.RESERVED:
+            raise BadRequest("основной и запасной кабинеты удалить нельзя")
+        log.info("timeweb account del name=%s by %s", name, p.email)
+        return {"ok": True, "text": runner.run_ok("account-del", name)}
+
+    @app.post("/v1/admin/spawn")
+    def admin_spawn(body: SpawnBody, p: Principal = Depends(admin)):
+        # арендует платный сервер Timeweb (Амстердам, самый дешёвый тариф, Debian) и разворачивает ячейку; идёт в фоне
+        acct = (body.account or "").strip()
+        if acct and not cells.ACCT_NAME.match(acct):
+            raise BadRequest("плохое имя кабинета")
+        log.warning("SPAWN (аренда сервера) account=%s by %s", acct or "по умолчанию", p.email)
+        return {"ok": True, "text": runner.run_ok("spawn", acct)}
+
+    @app.get("/v1/admin/spawn")
+    def admin_spawn_status(_p: Principal = Depends(admin)):
+        return cells.parse_spawn(runner.run_ok("spawnstatus"))
+
+    @app.post("/v1/admin/cells/{n}/delete")
+    def admin_cell_del(n: int, body: CellDelBody, p: Principal = Depends(admin)):
+        if not body.confirm:
+            raise BadRequest("нужно подтверждение: ячейка и её сервер в Timeweb будут удалены")
+        log.warning("CELL DELETE cell=%s by %s", n, p.email)
+        return {"ok": True, "text": runner.run_ok("celldel", str(n))}
 
     # ---------- суперадмин: пользователи ----------
     @app.get("/v1/admin/users")

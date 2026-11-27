@@ -36,6 +36,31 @@ def test_admin_can_force_and_emergency(env):
     assert ("rotate", "--force") in env.runner.calls and ("emergency", "on") in env.runner.calls
 
 
+def test_cabinet_choice_is_admin_only(env):
+    h, _ = env.login("griga@example.com")
+    assert env.client.post("/v1/control/rotate", headers=h, json={"server": 2}).status_code == 403
+    assert env.client.post("/v1/control/use", headers=h, json={"server": 2}).status_code == 403
+    assert env.runner.calls == []
+
+
+def test_admin_rotates_on_chosen_cabinet_and_switches_it(env):
+    h, _ = env.login("boss@example.com")
+    assert env.client.post("/v1/control/rotate", headers=h, json={"server": 2}).status_code == 200
+    assert env.client.post("/v1/control/rotate", headers=h, json={"force": True, "server": 1}).status_code == 200
+    assert env.client.post("/v1/control/rotate", headers=h, json={"force": False}).status_code == 200
+    assert env.client.post("/v1/control/use", headers=h, json={"server": 2}).status_code == 200
+    assert env.runner.calls == [("rotate", "2"), ("rotate", "--force 1"), ("rotate", ""), ("use", "2")]
+
+
+def test_cabinet_number_is_validated(env):
+    h, _ = env.login("boss@example.com")
+    for body in ({"server": 3}, {"server": 0}, {"server": "x"}):
+        assert env.client.post("/v1/control/rotate", headers=h, json=body).status_code == 422
+    for body in ({}, {"server": 3}, {"server": 0}, {"server": "1; id"}):
+        assert env.client.post("/v1/control/use", headers=h, json=body).status_code == 422
+    assert env.runner.calls == []
+
+
 # ---------- ключи ----------
 def test_user_gets_only_own_key_link(env):
     h, _ = env.login("griga@example.com")
@@ -191,6 +216,7 @@ def test_email_and_role_change_logged(env):
     ("status", "", ["status"]), ("server", "", ["server"]), ("list", "", ["list"]),
     ("link", "ivan", ["link", "ivan"]), ("reissue", "a.b-c_1", ["reissue", "a.b-c_1"]),
     ("rotate", "", ["rotate"]), ("rotate", "--force", ["rotate", "--force"]),
+    ("rotate", "2", ["rotate", "2"]), ("rotate", "--force 1", ["rotate", "--force", "1"]), ("use", "2", ["use", "2"]),
     ("reboot", "hard", ["reboot", "hard"]), ("emergency", "on", ["emergency", "on"]),
     ("keyconf", "ivan", ["keyconf", "ivan"]), ("resendall", "", ["resendall"]), ("mailstatus", "", ["mailstatus"]),
 ])
@@ -200,7 +226,9 @@ def test_allowed_commands(sub, arg, expected):
 
 @pytest.mark.parametrize("sub,arg", [
     ("status", "x"), ("link", ""), ("link", "a b"), ("link", "a;rm"), ("link", "../x"), ("link", "$(id)"),
-    ("rotate", "--evil"), ("reboot", "soft"), ("emergency", ""), ("emergency", "maybe"),
+    ("rotate", "--evil"), ("rotate", "3"), ("rotate", "0"), ("rotate", "1 2"), ("rotate", "2 --force"), ("rotate", "--force 3"), ("rotate", "1; id"),
+    ("use", ""), ("use", "3"), ("use", "0"), ("use", "--force"), ("use", "1 2"), ("use", "$(id)"),
+    ("reboot", "soft"), ("emergency", ""), ("emergency", "maybe"),
     ("mirror", ""), ("users", ""), ("sync", ""), ("bash", ""), ("", ""), ("mailtest", "a@b.ru"),
     ("resendall", "x"), ("mailstatus", "x"), ("keyconf", ""), ("keyconf", "a b"), ("keyconf", "$(id)"),
 ])

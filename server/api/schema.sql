@@ -124,3 +124,44 @@ CREATE TABLE IF NOT EXISTS user_events (
   KEY ix_events_user (user_id, created_at),
   CONSTRAINT fk_events_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
+
+-- Статистика по ключам. Ключ = имя пользователя VPN (как в vampn list). Пишет vampn-metrics раз в минуту из `vampn peers`
+-- (server/metrics), приложение только читает. Секретов нет: ни публичных ключей, ни конфигов. Применять можно повторно.
+-- Учёт идёт с первого запуска сборщика: что было раньше, неизвестно. Время везде UTC.
+CREATE TABLE IF NOT EXISTS key_stats (
+  key_name       VARCHAR(64)  NOT NULL,
+  up_total       BIGINT UNSIGNED NOT NULL DEFAULT 0,   -- принято от клиента, байт (его отдача) с начала учёта
+  down_total     BIGINT UNSIGNED NOT NULL DEFAULT 0,   -- отправлено клиенту, байт (его загрузка) с начала учёта
+  connections    INT UNSIGNED NOT NULL DEFAULT 0,      -- сколько раз подключался (новое рукопожатие после паузы больше 5 минут)
+  tracked_since  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  first_seen_at  TIMESTAMP    NULL,                    -- первое замеченное рукопожатие
+  last_seen_at   TIMESTAMP    NULL,                    -- последнее рукопожатие
+  last_client_ip VARCHAR(45)  NULL,
+  last_server    VARCHAR(16)  NULL,                    -- основной, запасной или аварийный
+  last_server_ip VARCHAR(45)  NULL,
+  updated_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (key_name)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS key_traffic (    -- байты по ключу по часам, хранится 90 дней
+  key_name   VARCHAR(64) NOT NULL,
+  hour       TIMESTAMP   NOT NULL,
+  up_bytes   BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  down_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (key_name, hour),
+  KEY ix_traffic_hour (hour)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS key_events (     -- подключения и переезды, хранится 90 дней
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  ts         TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  key_name   VARCHAR(64) NULL,                -- NULL: событие всего сервера, касается всех ключей
+  kind       ENUM('connect','client_ip','server_ip','server_switch') NOT NULL,
+  old_value  VARCHAR(64) NULL,                -- client_ip: прежний IP клиента; server_ip: прежний IP сервера; server_switch: прежний сервер
+  new_value  VARCHAR(64) NULL,                -- connect: IP клиента при подключении
+  server     VARCHAR(16) NULL,
+  server_ip  VARCHAR(45) NULL,
+  PRIMARY KEY (id),
+  KEY ix_kev_key (key_name, ts),
+  KEY ix_kev_ts (ts)
+) ENGINE=InnoDB;

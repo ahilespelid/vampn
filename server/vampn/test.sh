@@ -375,7 +375,7 @@ fi
 echo "== 9. рассылка ключей: resend-all, журнал, повторы, тревога"
 cat > "$T/fakeself" <<'FS'
 #!/bin/bash
-# заглушка vampn: _mail ИМЯ / _mail --link ИМЯ / conf ИМЯ; failfirst_ИМЯ - первый вызов неудачный, fail_ИМЯ - всегда
+# заглушка vampn: mailsend ИМЯ / mailsend --link ИМЯ / conf ИМЯ; failfirst_ИМЯ - первый вызов неудачный, fail_ИМЯ - всегда
 echo "self VAMPN_BASE=${VAMPN_BASE:-} $*" >> "$T/calls"
 n=${*: -1}
 if [[ -f $T/fail_$n ]]; then exit 1; fi
@@ -392,43 +392,43 @@ jl() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$2@x.ru" key "$3" "${4:-}" >
 
 mk9; out=$(resend_all 2>&1); rc=$?
 ok "resend-all: все 3 приняты, итог в выводе" "[[ $rc == 0 && \$out == *'ИТОГ: принято 3 из 3'* ]]"
-ok "resend-all: письма собираются из копии данных (VAMPN_BASE=mirror)" "[[ \$(grep -c \"self VAMPN_BASE=$STATE/mirror _mail\" $CALLS) == 3 ]]"
-ok "resend-all: комментарий из users.conf не принят за пользователя" "! grep -q '_mail #' $CALLS && ! grep -q '_mail пользователи' $CALLS"
+ok "resend-all: письма собираются из копии данных (VAMPN_BASE=mirror)" "[[ \$(grep -c \"self VAMPN_BASE=$STATE/mirror mailsend\" $CALLS) == 3 ]]"
+ok "resend-all: комментарий из users.conf не принят за пользователя" "! grep -q 'mailsend #' $CALLS && ! grep -q 'mailsend пользователи' $CALLS"
 ok "resend-all: при успехе тревоги нет" "! grep -q NOTIFY $CALLS"
 
 mk9; touch "$T/fail_b"; out=$(resend_all 2>&1); rc=$?
-ok "resend-all: неушедший b повторён вторым проходом (2 вызова)" "[[ \$(grep -c '_mail b' $CALLS) == 2 ]]"
+ok "resend-all: неушедший b повторён вторым проходом (2 вызова)" "[[ \$(grep -c 'mailsend b' $CALLS) == 2 ]]"
 ok "resend-all: код 1 и список неушедших в итоге" "[[ $rc == 1 && \$out == *'ИТОГ: принято 2 из 3, не ушло: b'* ]]"
 ok "resend-all: тревога в Telegram с именем" "grep -q 'NOTIFY рассылка ключей: принято 2 из 3, НЕ ушло: b' $CALLS"
-ok "resend-all: удачные не повторялись" "[[ \$(grep -c '_mail a' $CALLS) == 1 && \$(grep -c '_mail c' $CALLS) == 1 ]]"
+ok "resend-all: удачные не повторялись" "[[ \$(grep -c 'mailsend a' $CALLS) == 1 && \$(grep -c 'mailsend c' $CALLS) == 1 ]]"
 
 mk9; touch "$T/failfirst_b"; out=$(resend_all 2>&1); rc=$?
 ok "resend-all: b ушёл со второй попытки - итог 3 из 3, без тревоги" "[[ $rc == 0 && \$out == *'ИТОГ: принято 3 из 3'* ]] && ! grep -q NOTIFY $CALLS"
 
 mk9; echo 2.2.2.2 > "$T/ep"; out=$(resend_all 2>&1); rc=$?
-ok "resend-all: адрес копии не совпал с туннелем - письма не шлёт" "[[ $rc != 0 && \$out == *'не совпал'* ]] && ! grep -q '_mail' $CALLS"
+ok "resend-all: адрес копии не совпал с туннелем - письма не шлёт" "[[ $rc != 0 && \$out == *'не совпал'* ]] && ! grep -q 'mailsend' $CALLS"
 mk9; EMA=1; out=$(resend_all 2>&1); rc=$?
-ok "resend-all: в аварийном режиме отказывается" "[[ $rc != 0 && \$out == *'аварийный'* ]] && ! grep -q '_mail' $CALLS"
+ok "resend-all: в аварийном режиме отказывается" "[[ $rc != 0 && \$out == *'аварийный'* ]] && ! grep -q 'mailsend' $CALLS"
 
 echo "-- журнал и сторож"
 mk9; touch "$T/fail_b"; jl $((FAKE_NOW-5000)) a ok; jl $((FAKE_NOW-700)) b fail "SMTPServerDisconnected: x"; jl $((FAKE_NOW-100)) c fail "timeout"
 ok "mail_failed: видит b и c, a не видит" "[[ \$(mail_failed | cut -f1 | tr '\n' ' ') == 'b c ' ]]"
 mail_watch
 ok "сторож: одно сообщение о новых неушедших (b c)" "[[ \$(grep -c 'NOTIFY письмо с ключом не ушло: b c' $CALLS) == 1 ]]"
-ok "сторож: повторяет только b (c свежий), одно письмо за проверку" "[[ \$(grep -c '_mail b' $CALLS) == 1 && \$(grep -c '_mail c' $CALLS) == 0 ]]"
+ok "сторож: повторяет только b (c свежий), одно письмо за проверку" "[[ \$(grep -c 'mailsend b' $CALLS) == 1 && \$(grep -c 'mailsend c' $CALLS) == 0 ]]"
 mail_watch; mail_watch
 ok "сторож: повторы b считаются, сообщение не дублируется" "[[ \$(get mail_retry_b) == 3 ]] && [[ \$(grep -c 'NOTIFY письмо с ключом не ушло' $CALLS) == 1 ]]"
 mail_watch; mail_watch
-ok "сторож: после 3 повторов сдаётся и пишет один раз" "[[ \$(grep -c '_mail b' $CALLS) == 3 && \$(grep -c 'не ушёл и после 3 повторов' $CALLS) == 1 ]]"
+ok "сторож: после 3 повторов сдаётся и пишет один раз" "[[ \$(grep -c 'mailsend b' $CALLS) == 3 && \$(grep -c 'не ушёл и после 3 повторов' $CALLS) == 1 ]]"
 jl $((FAKE_NOW+1)) b ok; jl $((FAKE_NOW+1)) c ok; mail_watch
 ok "когда всё ушло, служебные метки сброшены" "[[ ! -e $STATE/mail_alerted && ! -e $STATE/mail_retry_b && ! -e $STATE/mail_gaveup_b ]]"
 
 mk9; jl $((FAKE_NOW-900)) b fail "x"; EMA=1; mail_watch
-ok "аварийный режим: сторож сообщает, но не шлёт ключи основного сервера" "grep -q 'NOTIFY письмо с ключом не ушло: b' $CALLS && ! grep -q '_mail' $CALLS"
+ok "аварийный режим: сторож сообщает, но не шлёт ключи основного сервера" "grep -q 'NOTIFY письмо с ключом не ушло: b' $CALLS && ! grep -q 'mailsend' $CALLS"
 mk9; jl $((FAKE_NOW-900)) b fail "x"; echo 3.3.3.3 > "$T/ep"; mail_watch
-ok "адрес копии не совпал с туннелем: сторож сообщает, но не шлёт" "grep -q 'NOTIFY' $CALLS && ! grep -q '_mail' $CALLS"
+ok "адрес копии не совпал с туннелем: сторож сообщает, но не шлёт" "grep -q 'NOTIFY' $CALLS && ! grep -q 'mailsend' $CALLS"
 mk9; jl $((FAKE_NOW-900)) b fail "x"; touch "$T/fail_b"; mail_watch; jl $((FAKE_NOW-1)) b fail "x"; mail_watch
-ok "повтор не раньше чем через 10 минут после последней неудачи" "[[ \$(grep -c '_mail b' $CALLS) == 1 ]]"
+ok "повтор не раньше чем через 10 минут после последней неудачи" "[[ \$(grep -c 'mailsend b' $CALLS) == 1 ]]"
 
 echo "-- vampn mailstatus"
 mk9; jl $((FAKE_NOW-60)) a ok; jl $((FAKE_NOW-60)) b fail "SMTPRecipientsRefused: no such user"
@@ -440,7 +440,7 @@ ok "mailstatus: код 1, пока есть неушедшие" "[[ $rc == 1 ]]"
 echo "-- link/keyconf из копии данных"
 mk9; : > "$CALLS"
 out=$(key_local link a); rc=$?
-ok "key_local link: берёт ссылку из копии" "[[ $rc == 0 ]] && grep -q 'self VAMPN_BASE=.*mirror _mail --link a' $CALLS"
+ok "key_local link: берёт ссылку из копии" "[[ $rc == 0 ]] && grep -q 'self VAMPN_BASE=.*mirror mailsend --link a' $CALLS"
 : > "$CALLS"; key_local conf b; rc=$?
 ok "key_local conf: берёт .conf из копии" "[[ $rc == 0 ]] && grep -q 'self VAMPN_BASE=.*mirror conf b' $CALLS"
 echo 9.9.9.9 > "$T/ep"; : > "$CALLS"; key_local link a; rc=$?
@@ -722,23 +722,23 @@ ok "netplan не применился: закрепка не остаётся, �
 : > "$CALLS"; srv_pin_expected
 ok "повтор не чаще раза в 2 минуты" "! grep -q 'закрепляю' $CALLS"
 env11; out=$( (srv_expect_ip 82.97.246.204) 2>&1 ); rc=$?
-ok "команда expect-ip: принимает, записывает с меткой времени и сразу закрепляет" "[[ $rc == 0 && \$out == 'ok 82.97.246.204' && \$(srv_expect) == \"82.97.246.204 \$(now)\" && \$(srv_pinned_ip) == 82.97.246.204 ]]"
+ok "команда expectip: принимает, записывает с меткой времени и сразу закрепляет" "[[ $rc == 0 && \$out == 'ok 82.97.246.204' && \$(srv_expect) == \"82.97.246.204 \$(now)\" && \$(srv_pinned_ip) == 82.97.246.204 ]]"
 for bad in "" "abc" "82.97.246" "82.97.246.204; rm -rf /" "10.0.0.5" "192.168.1.1" "100.64.1.1" "172.20.0.1" "127.0.0.1"; do
   env11; out=$( (srv_expect_ip "$bad") 2>&1 ); rc=$?
-  ok "expect-ip отвергает «$bad»" "[[ $rc != 0 && ! -e $PIN_FILE && \$(srv_expect) == 'none 0' ]]"
+  ok "expectip отвергает «$bad»" "[[ $rc != 0 && ! -e $PIN_FILE && \$(srv_expect) == 'none 0' ]]"
 done
 
 echo "== 12. homeserv сообщает серверу его адрес"
 ip_routed() { grep -qx "$1" "$T/routed"; }; SRV_RC=0; REMOTE_RC=0; ANN_RC=0   # заглушки раздела 1 (раздел 7 подставлял настоящую ip_routed)
 reset; printf '9.9.9.9\n' > "$T/ips"
 push_expect
-ok "активному серверу уходит его адрес из Timeweb" "grep -q 'remote expect-ip 9.9.9.9' $CALLS && [[ \$(get expect_pushed) == '9.9.9.9 1000000' ]]"
+ok "активному серверу уходит его адрес из Timeweb" "grep -q 'remote expectip 9.9.9.9' $CALLS && [[ \$(get expect_pushed) == '9.9.9.9 1000000' ]]"
 : > "$CALLS"; FAKE_NOW=$((FAKE_NOW+60)); push_expect
-ok "тот же адрес повторно не шлётся раньше чем через 5 минут" "! grep -q 'remote expect-ip' $CALLS"
+ok "тот же адрес повторно не шлётся раньше чем через 5 минут" "! grep -q 'remote expectip' $CALLS"
 FAKE_NOW=$((FAKE_NOW+250)); push_expect
-ok "через 5 минут - обновляет (серверу он верен 15 минут)" "grep -q 'remote expect-ip 9.9.9.9' $CALLS"
+ok "через 5 минут - обновляет (серверу он верен 15 минут)" "grep -q 'remote expectip 9.9.9.9' $CALLS"
 : > "$CALLS"; printf '8.8.8.8\n' > "$T/ips"; push_expect
-ok "адрес в Timeweb поменялся - шлётся сразу" "grep -q 'remote expect-ip 8.8.8.8' $CALLS"
+ok "адрес в Timeweb поменялся - шлётся сразу" "grep -q 'remote expectip 8.8.8.8' $CALLS"
 : > "$CALLS"; REMOTE_RC=1; FAKE_NOW=$((FAKE_NOW+400)); push_expect; rc=$?
 ok "сервер не принял - метка не обновляется, вернулась 1, повтор в следующую минуту" "[[ $rc == 1 && \$(get expect_pushed) != *\" \$FAKE_NOW\" ]]"
 REMOTE_RC=0
@@ -754,11 +754,11 @@ alive() { return "${ALIVE_RC:-0}"; }
 remote() { echo "remote $1" >> "$CALLS"; return "${REMOTE_RC:-0}"; }
 SSH_SRV=(srv_ssh); srv_ssh() { echo "srv_ssh $*" >> "$CALLS"; return "${SRV_RC:-0}"; }
 reset; put active_target 1; n=1; ALIVE_RC=0; real_announce_ip 9.9.9.9 A1
-ok "активный: через туннель, командой expect-ip" "grep -q 'remote expect-ip A1' $CALLS && grep -q 'LOG \[основной\] серверу сообщён новый адрес A1 (через туннель)' $CALLS"
+ok "активный: через туннель, командой expectip" "grep -q 'remote expectip A1' $CALLS && grep -q 'LOG \[основной\] серверу сообщён новый адрес A1 (через туннель)' $CALLS"
 reset; put active_target 1; n=1; ALIVE_RC=1; real_announce_ip 9.9.9.9 A1; rc=$?
-ok "активный, туннель мёртв: не вышло, в журнале причина" "[[ $rc == 1 ]] && ! grep -q 'remote expect-ip' $CALLS && grep -q 'сообщить не вышло' $CALLS"
+ok "активный, туннель мёртв: не вышло, в журнале причина" "[[ $rc == 1 ]] && ! grep -q 'remote expectip' $CALLS && grep -q 'сообщить не вышло' $CALLS"
 reset; put active_target 1; n=2; TSUF=_2; real_announce_ip 8.8.8.8 Y1; rc=$?; TSUF=""
-ok "неактивный: напрямую на старый адрес, HostKeyAlias как у туннельного адреса" "[[ $rc == 0 ]] && grep -q 'srv_ssh .*-o HostKeyAlias=10.77.0.1 .*root@8.8.8.8 expect-ip Y1' $CALLS && ! grep -q 'remote expect-ip' $CALLS"
+ok "неактивный: напрямую на старый адрес, HostKeyAlias как у туннельного адреса" "[[ $rc == 0 ]] && grep -q 'srv_ssh .*-o HostKeyAlias=10.77.0.1 .*root@8.8.8.8 expectip Y1' $CALLS && ! grep -q 'remote expectip' $CALLS"
 reset; put active_target 1; n=2; SRV_RC=255; real_announce_ip 8.8.8.8 Y1; rc=$?; SRV_RC=0
 ok "неактивный, порт 22 закрыт: не вышло, без паники" "[[ $rc == 1 ]] && grep -q 'сообщить не вышло' $CALLS"
 reset; put active_target 1; n=2; real_announce_ip "" Y1; rc=$?
@@ -880,6 +880,12 @@ echo "== 17. пир homeserv на новом сервере: адрес .3, ко
 ok "homeserv: один пир с адресом 10.77.4.3, повторный вызов ничего не меняет" 'grep -q "files=homeserv.conf homeserv.env" $T/hh.out && grep -q "^IP=10.77.4.3$" $T/hh.out'
 ok "конфиг туннеля: адрес клиента .3, endpoint нового сервера, ключ сервера" 'grep -q "^Address = 10.77.4.3/32" $T/hh.out && grep -q "^Endpoint = 203.0.113.7:" $T/hh.out && grep -q "^PublicKey = PUB-" $T/hh.out'
 
+mkdir -p "$R/ibin"; for c in apt-get gpg; do printf '#!/bin/bash\n%s\n' "$([[ $c == gpg ]] && echo 'exit 1' || echo 'echo "$0 $*" >> '"$R"'/apt.log; exit 0')" > "$R/ibin/$c"; chmod +x "$R/ibin/$c"; done
+rm -f "$R/apt.log"; out=$(PATH=$R/ibin:$PATH bash "$INS" --packages-only 2>&1); rc=$?
+if [[ -s /usr/share/keyrings/amnezia.gpg ]]; then ok "init: --packages-only обходит проверку параметров установки (--net и ключей не просит)" '! grep -q -- "--net" <<<"$out"'
+else ok "init: --packages-only не просит --net и ключи, обновляет apt и останавливается без ключа PPA" '[[ $rc != 0 ]] && grep -q "нет ключа PPA" <<<"$out" && ! grep -q -- "--net" <<<"$out" && grep -q update "$R/apt.log"'; fi
+ok "init: команда vampn init есть в справке и отдаёт install.sh с --packages-only" 'grep -q "vampn init" "$FILE" && install_sh | grep -q -- "--packages-only"'
+
 echo "== 18. ячейки и spawn: кабинеты, выбор тарифа, развёртывание на заглушках (в Timeweb и на серверы не ходит)"
 INSTALL_FILE=$(dirname "$(readlink -f "$FILE")")/install.sh
 ok "встроенный в vampn install.sh совпадает с install.sh (если нет - bash embed.sh)" '[[ $(install_sh | sha256sum) == $(sha256sum < "$INSTALL_FILE") ]]'
@@ -890,6 +896,7 @@ printf '# k\nMAIL_FROM=vpn@x.ru\nSMTP_PASS=secret\n' > "$S/etc/secrets.env"
 printf 'TIMEWEB_TOKEN=tok-main-0000000000000000\nTIMEWEB_SERVER_ID=1\n' > "$S/etc/timeweb.env"
 PRESETS='{"server_presets":[{"id":1,"location":"ru-4","price":350},{"id":6803,"location":"nl-1","price":950},{"id":6810,"location":"nl-1","price":1500},{"id":6801,"location":"nl-1","price":950},{"id":2,"location":"pl-1","price":600}]}'
 OSES='{"servers_os":[{"id":67,"name":"debian","version":"11"},{"id":95,"name":"debian","version":"12"},{"id":109,"name":"debian","version":"13"},{"id":5,"name":"ubuntu","version":"24.04"}]}'
+SPAWN_RETRY_WAIT=0
 TWLOG=$S/tw.log; : > "$TWLOG"; TW_SERVERS='{"servers":[]}'; TW_CREATE='{"server":{"id":777}}'; TW_TOKEN_OK=1; TW_ON=on
 twa() { echo "$2 $3 $(tr -d '\n' <<<"${4:-}")" >> "$TWLOG"
   case "$2 $3" in
@@ -897,7 +904,9 @@ twa() { echo "$2 $3 $(tr -d '\n' <<<"${4:-}")" >> "$TWLOG"
     "GET /presets/servers") echo "$PRESETS" ;;   "GET /os/servers") echo "$OSES" ;;
     "GET /servers") echo "$TW_SERVERS" ;;           "GET /ssh-keys") echo '{"ssh_keys":[]}' ;;
     "POST /ssh-keys") echo '{"ssh_key":{"id":55}}' ;; "POST /servers") echo "$TW_CREATE" ;;
-    "GET /servers/777") echo "{\"server\":{\"id\":777,\"status\":\"$TW_ON\",\"networks\":[{\"ips\":[{\"ip\":\"2a03::1\",\"type\":\"ipv6\",\"is_main\":true},{\"ip\":\"203.0.113.9\",\"type\":\"ipv4\",\"is_main\":true}]}]}}" ;;
+    "POST /servers/777/ips") touch "$S/ip_given"; echo '{"server_ip":{"ip":"203.0.113.9","type":"ipv4"}}' ;;
+    "GET /servers/777") if [[ ${TW_NOIP:-} == 1 && ! -f $S/ip_given ]]; then echo "{\"server\":{\"id\":777,\"status\":\"$TW_ON\",\"networks\":[{\"ips\":[]}]}}"
+       else echo "{\"server\":{\"id\":777,\"status\":\"$TW_ON\",\"networks\":[{\"ips\":[{\"ip\":\"2a03::1\",\"type\":\"ipv6\",\"is_main\":true},{\"ip\":\"203.0.113.9\",\"type\":\"ipv4\",\"is_main\":true}]}]}}"; fi ;;
     "DELETE /servers/777") echo '{"message":"ok"}' ;;
     *) echo '{"message":"unexpected"}' ;;
   esac; }
@@ -905,16 +914,25 @@ ssh() { local a="$*"; echo "ssh ${a: -60}" >> "$S/ssh.log"
   case $a in
     *install.sh*) cat > "$S/payload.tar"; [[ ${INSTALL_FAIL:-} == 1 ]] && { echo "E: boom"; return 1; }
        echo "[install] x"; echo VAMPN_PORT=41234; echo VAMPN_SERVER_PUBKEY=SRVPUB=; echo "VAMPN_MAILRELAY_PUB=ssh-ed25519 AAAARELAY"; [[ ${INSTALL_NOOK:-} == 1 ]] || echo VAMPN_INSTALL_OK=1 ;;
-    *home-conf*) printf '[Interface]\nPrivateKey = HK\nAddress = 10.77.4.3/32\nDNS = 1.1.1.1\nMTU = 1380\n\n[Peer]\nPublicKey = SRVPUB=\nPresharedKey = P\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 203.0.113.9:41234\nPersistentKeepalive = 25\n' ;;
+    *homeconf*) printf '[Interface]\nPrivateKey = HK\nAddress = 10.77.4.3/32\nDNS = 1.1.1.1\nMTU = 1380\n\n[Peer]\nPublicKey = SRVPUB=\nPresharedKey = P\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 203.0.113.9:41234\nPersistentKeepalive = 25\n' ;;
     *) return 0 ;;
   esac; }
 awg() { [[ $1 == show && ${HS_NONE:-} != 1 ]] && echo "PK $(( $(now) - 5 ))"; return 0; }
 systemctl() { echo "systemctl $*" >> "$CALLS"; return 0; }
 ssh-keyscan() { echo "10.77.4.1 ssh-ed25519 AAAAHOSTKEY"; }
+sp_udp_check() { [[ ${UDP_FAIL:-} != 1 ]]; }
 curl() { echo 195.170.195.92; }
 ssh-keygen() { [[ ${KEYGEN_FAIL:-} == 1 ]] && return 1; local f; while [[ $# -gt 0 ]]; do [[ $1 == -f ]] && f=$2; shift; done; echo FAKEPRIV > "$f"; echo "ssh-ed25519 AAAAFAKE vampn-spawn" > "$f.pub"; }
 printf '#!/bin/bash\necho "self $*" >> %s\n' "$CALLS" > "$T/fakeself2"; chmod +x "$T/fakeself2"
 spawn_try() { : > "$CALLS"; : > "$TWLOG"; rm -rf "$S/spawn"; mkdir -p "$S/spawn"; ( SELF=$T/fakeself2 spawn_run "${1:-main}" ) >/dev/null 2>&1; }
+
+# -- свежий сервер: srv_status не падает без журнала (иначе pipefail ронял install.sh на «vampn status не отработал»)
+( set -uo pipefail
+  eval "$(sed -n '/^srv_status()/,/^}/p' "$FILE")"
+  STATE=$T/fresh-state; mkdir -p "$STATE"; BASE=$T/fresh-base; mkdir -p "$BASE"; ENDPOINT_IP=1.2.3.4
+  srv_dhcp_ip() { echo 1.2.3.4; }; srv_pinned_ip() { :; }; srv_inet_ok() { return 0; }; get() { echo 0; }; ip() { return 0; }; nft() { return 0; }
+  srv_status >/dev/null 2>&1 ); rc=$?
+ok "srv_status на свежем сервере (журнала нет) завершается с кодом 0" '[[ $rc == 0 ]]'
 
 # -- кабинеты
 acc_out=$( printf 'tok-new-0000000000000000000\n' | account_main add second 2>&1 ); acc_rc=$?
@@ -952,6 +970,11 @@ ok "spawn: бандл ушёл на сервер (vampn, install.sh, amnezia.gpg
 ok "spawn: ключ spawn.key создан и его открытая часть отправлена в Timeweb" '[[ -f $ETC_DIR/spawn.key && $(grep -c "" $ETC_DIR/spawn.key.pub) == 1 ]] && grep -q "^POST /ssh-keys .*ssh-ed25519 AAAAFAKE" "$TWLOG"'
 ok "cells: ячейка 2 в таблице с IP и состоянием" 't=$(cells_main); grep -q "^2.vampn_2.203.0.113.9.0.1000" <<<"$t" || grep -qP "^2\tvampn_2\t203.0.113.9\t0\t1000\t" <<<"$t"'
 
+# -- Timeweb создал сервер без адреса: spawn сам запрашивает IPv4 (один раз) и идёт дальше
+rm -f "$S/ip_given"; TW_NOIP=1; SPAWN_POLL=0; spawn_try main
+ok "сервер без IP: spawn запросил IPv4 ровно один раз и довёл ячейку до конца" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == done ]] && [[ $(grep -c "^POST /servers/777/ips" "$TWLOG") == 1 ]] && grep -q "запрашиваю IPv4" "$SPAWN_DIR/job.log" && ( . "$CELLS_DIR/3.env"; [[ $CELL_IP == 203.0.113.9 ]] )'
+unset TW_NOIP SPAWN_POLL; rm -f "$S/ip_given" "$CELLS_DIR"/3.* "$AWG_DIR/vampn3.conf"; sed -i "/vampn-mailrelay-3/d" "$HOME_AK"
+
 # -- вторая аренда: имя vampn_2 занято в Timeweb и ячейка 2 есть -> vampn_3
 TW_SERVERS='{"servers":[{"id":5,"name":"vampn_2"}]}'; TW_CREATE='{"server":{"id":777}}'
 mkdir -p "$S/keep"; cp "$CELLS_DIR/2.env" "$S/keep/2.env"
@@ -966,7 +989,11 @@ TW_CREATE='{"message":"Not enough funds","error_code":"payment_required"}'; spaw
 ok "сбой создания сервера: состояние failed, ячейка не создана, есть тревога" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed && ! -f $CELLS_DIR/4.env ]] && grep -q "^tg notify alerts" $CALLS'
 TW_CREATE='{"server":{"id":777}}'; INSTALL_FAIL=1; spawn_try main
 ok "сбой install.sh: ячейка помечена «ошибка», сервер и запись остаются для разбора" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]] && ( . "$CELLS_DIR/3.env"; [[ $CELL_STATE == ошибка ]] ) && ! grep -q "enable --now vampn-cell@3" $CALLS'
-INSTALL_FAIL=0; INSTALL_NOOK=1; rm -f "$CELLS_DIR"/3.*; spawn_try main
+INSTALL_FAIL=0; : > "$CALLS"; : > "$TWLOG"; rm -rf "$S/spawn"; mkdir -p "$S/spawn"; ( SPAWN_RESUME=3 SELF=$T/fakeself2 spawn_run main ) >/dev/null 2>&1
+ok "spawnresume: на уже созданном сервере ячейки 3 дорабатывает до конца, нового сервера не создаёт" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == done ]] && ! grep -q "^POST /servers " "$TWLOG" && ( . "$CELLS_DIR/3.env"; [[ $CELL_STATE == активна && $CELL_SERVER_ID == 777 && $CELL_IP == 203.0.113.9 ]] ) && grep -q "systemctl enable --now vampn-cell@3" $CALLS'
+ok "spawnresume: без такой ячейки - сбой, ничего не создаёт" '( : > "$TWLOG"; SPAWN_RESUME=9 SELF=$T/fakeself2 spawn_run main ) >/dev/null 2>&1; [[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]] && ! grep -q "^POST /servers " "$TWLOG"'
+ok "spawnresume: команда без номера или с ячейкой 1 отклоняется" '! (spawn_resume_main) >/dev/null 2>&1 && ! (spawn_resume_main 1) >/dev/null 2>&1 && ! (spawn_resume_main abc) >/dev/null 2>&1'
+INSTALL_NOOK=1; rm -f "$CELLS_DIR"/3.*; spawn_try main
 ok "install.sh без подтверждения VAMPN_INSTALL_OK - сбой" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]]'
 INSTALL_NOOK=0; HS_NONE=1; rm -f "$CELLS_DIR"/3.*; spawn_try main
 ok "нет рукопожатия с новым сервером - сбой, таймер ячейки не включён" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]] && ! grep -q "enable --now vampn-cell@" $CALLS'
@@ -975,13 +1002,28 @@ HS_NONE=0; rm -f "$CELLS_DIR"/3.*
 ok "два spawn одновременно нельзя (занят замок)" '[[ $(cat $S/rc_lock) != 0 ]]'
 unset INSTALL_FAIL INSTALL_NOOK HS_NONE
 
+# -- автоповтор: нерабочий сервер удаляется, берётся новый
+loop_try() { : > "$CALLS"; : > "$TWLOG"; rm -rf "$S/spawn"; mkdir -p "$S/spawn"; ( SELF=$T/fakeself2 spawn_loop "${1:-main}" ) >/dev/null 2>&1; }
+rm -f "$CELLS_DIR"/3.* "$AWG_DIR"/vampn3.conf; INSTALL_FAIL=1; SPAWN_TRIES=2; loop_try main
+ok "spawn_loop: install.sh падает - 2 попытки, 2 сервера создано и оба удалены, ячейки не осталось" '[[ $(grep -c "^POST /servers " "$TWLOG") == 2 && $(grep -c "^DELETE /servers/777" "$TWLOG") == 2 && ! -f $CELLS_DIR/3.env && ! -f $CELLS_DIR/3.timeweb.env && $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]]'
+ok "install.sh при обрыве связи запускается до 3 раз, потом сбой" '[[ $(grep -c "install.sh, попытка" "$SPAWN_DIR/job.log") == 6 ]]'
+ok "spawn_loop: в журнале обе попытки, удаление и итоговая тревога" 'grep -q "попытка 2 из 2" "$SPAWN_DIR/job.log" && [[ $(grep -c "удаляю нерабочий сервер" "$SPAWN_DIR/job.log") == 2 ]] && grep -q "tg notify alerts" $CALLS'
+rm -f "$CELLS_DIR"/3.* "$AWG_DIR"/vampn3.conf; UDP_FAIL=1; SPAWN_TRIES=2; : > "$S/ssh.log"; loop_try main
+ok "spawn_loop: UDP до сервера не проходит - установка не начинается, сервер удаляется, берётся другой" '[[ $(grep -c "^POST /servers " "$TWLOG") == 2 && $(grep -c "^DELETE /servers/777" "$TWLOG") == 2 && ! -f $CELLS_DIR/3.env ]] && ! grep -q "install.sh" "$S/ssh.log" && grep -q "UDP от homeserv" "$SPAWN_DIR/job.log"'
+unset UDP_FAIL INSTALL_FAIL; SPAWN_TRIES=3; rm -f "$CELLS_DIR"/3.*; loop_try main
+ok "spawn_loop: с первой попытки получилось - один сервер, ничего не удаляется" '[[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == done && $(grep -c "^POST /servers " "$TWLOG") == 1 ]] && ! grep -q "^DELETE /servers" "$TWLOG" && ( . "$CELLS_DIR/3.env"; [[ $CELL_STATE == активна ]] )'
+rm -f "$CELLS_DIR"/3.* "$AWG_DIR"/vampn3.conf; sed -i "/vampn-mailrelay-3/d" "$HOME_AK"
+TW_CREATE='{"message":"Not enough funds","error_code":"payment_required"}'; loop_try main
+ok "spawn_loop: сервер не создан (нет денег) - одна попытка, удалять и повторять нечего" '[[ $(grep -c "^POST /servers " "$TWLOG") == 1 ]] && ! grep -q "^DELETE /servers" "$TWLOG" && [[ $(cut -d: -f1 "$SPAWN_DIR/job.state") == failed ]]'
+TW_CREATE='{"server":{"id":777}}'; unset SPAWN_TRIES
+
 # -- удаление
 printf 'a a@x.ru 2\n' > "$S/users.conf"; cp "$S/keep/2.env" "$CELLS_DIR/2.env"
-ok "cell-del: без --yes отказ" '! (cell_del 2) >/dev/null 2>&1 && [[ -f $CELLS_DIR/2.env ]]'
-ok "cell-del: в ячейке есть пользователи - отказ без --force" '! (cell_del 2 --yes) >/dev/null 2>&1 && [[ -f $CELLS_DIR/2.env ]]'
-ok "cell-del: ячейку 1 удалить нельзя" '! (cell_del 1 --yes) >/dev/null 2>&1'
+ok "celldel: без --yes отказ" '! (cell_del 2) >/dev/null 2>&1 && [[ -f $CELLS_DIR/2.env ]]'
+ok "celldel: в ячейке есть пользователи - отказ без --force" '! (cell_del 2 --yes) >/dev/null 2>&1 && [[ -f $CELLS_DIR/2.env ]]'
+ok "celldel: ячейку 1 удалить нельзя" '! (cell_del 1 --yes) >/dev/null 2>&1'
 printf 'a a@x.ru\n' > "$S/users.conf"; : > "$TWLOG"
-ok "cell-del: пустую ячейку убирает и просит Timeweb удалить сервер" 'cell_del 2 --yes >/dev/null 2>&1 && [[ ! -f $CELLS_DIR/2.env && ! -f $AWG_DIR/vampn2.conf ]] && grep -q "^DELETE /servers/777" "$TWLOG"'
+ok "celldel: пустую ячейку убирает и просит Timeweb удалить сервер" 'cell_del 2 --yes >/dev/null 2>&1 && [[ ! -f $CELLS_DIR/2.env && ! -f $AWG_DIR/vampn2.conf ]] && grep -q "^DELETE /servers/777" "$TWLOG"'
 ok "cell_users: считает по третьему столбцу, без номера - ячейка 1" 'printf "a a@x.ru\nb b@x.ru 2\nc c@x.ru 2\n" > $S/users.conf; [[ $(cell_users 1) == 1 && $(cell_users 2) == 2 && $(cell_users 3) == 0 ]]'
 unset -f twa ssh awg systemctl ssh-keyscan curl ssh-keygen
 

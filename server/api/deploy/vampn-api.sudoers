@@ -1,10 +1,17 @@
 # /etc/sudoers.d/vampn-api  (chmod 440; проверять visudo -cf). Пользователь vampn может запускать ТОЛЬКО эти подкоманды.
-# Имена пользователей дополнительно проверяет API (латиница, цифры, _ . -, до 32 символов).
+# Имена пользователей дополнительно проверяет API (латиница, цифры, _ . -, до 32 символов), имена кабинетов Timeweb - тоже.
+# celldel разрешён только в виде «celldel N --yes» для N=2..30 (без --force: ячейку с пользователями vampn не удалит).
 Cmnd_Alias VAMPN_API = /usr/local/sbin/vampn status, \
                        /usr/local/sbin/vampn server, \
                        /usr/local/sbin/vampn list, \
                        /usr/local/sbin/vampn rotate, \
                        /usr/local/sbin/vampn rotate --force, \
+                       /usr/local/sbin/vampn rotate 1, \
+                       /usr/local/sbin/vampn rotate 2, \
+                       /usr/local/sbin/vampn rotate --force 1, \
+                       /usr/local/sbin/vampn rotate --force 2, \
+                       /usr/local/sbin/vampn use 1, \
+                       /usr/local/sbin/vampn use 2, \
                        /usr/local/sbin/vampn reboot, \
                        /usr/local/sbin/vampn reboot hard, \
                        /usr/local/sbin/vampn emergency on, \
@@ -15,5 +22,42 @@ Cmnd_Alias VAMPN_API = /usr/local/sbin/vampn status, \
                        /usr/local/sbin/vampn link [a-zA-Z0-9_.-]*, \
                        /usr/local/sbin/vampn keyconf [a-zA-Z0-9_.-]*, \
                        /usr/local/sbin/vampn resend [a-zA-Z0-9_.-]*, \
-                       /usr/local/sbin/vampn reissue [a-zA-Z0-9_.-]*
+                       /usr/local/sbin/vampn reissue [a-zA-Z0-9_.-]*, \
+                       /usr/local/sbin/vampn cells, \
+                       /usr/local/sbin/vampn spawn, \
+                       /usr/local/sbin/vampn spawn [a-z0-9]*, \
+                       /usr/local/sbin/vampn spawnstatus 40, \
+                       /usr/local/sbin/vampn account list --tsv, \
+                       /usr/local/sbin/vampn account add [a-z0-9]*, \
+                       /usr/local/sbin/vampn account default [a-z0-9]*, \
+                       /usr/local/sbin/vampn account del [a-z0-9]*, \
+                       /usr/local/sbin/vampn celldel 2 --yes, \
+                       /usr/local/sbin/vampn celldel 3 --yes, \
+                       /usr/local/sbin/vampn celldel 4 --yes, \
+                       /usr/local/sbin/vampn celldel 5 --yes, \
+                       /usr/local/sbin/vampn celldel 6 --yes, \
+                       /usr/local/sbin/vampn celldel 7 --yes, \
+                       /usr/local/sbin/vampn celldel 8 --yes, \
+                       /usr/local/sbin/vampn celldel 9 --yes, \
+                       /usr/local/sbin/vampn celldel 10 --yes, \
+                       /usr/local/sbin/vampn celldel 11 --yes, \
+                       /usr/local/sbin/vampn celldel 12 --yes, \
+                       /usr/local/sbin/vampn celldel 13 --yes, \
+                       /usr/local/sbin/vampn celldel 14 --yes, \
+                       /usr/local/sbin/vampn celldel 15 --yes, \
+                       /usr/local/sbin/vampn celldel 16 --yes, \
+                       /usr/local/sbin/vampn celldel 17 --yes, \
+                       /usr/local/sbin/vampn celldel 18 --yes, \
+                       /usr/local/sbin/vampn celldel 19 --yes, \
+                       /usr/local/sbin/vampn celldel 20 --yes, \
+                       /usr/local/sbin/vampn celldel 21 --yes, \
+                       /usr/local/sbin/vampn celldel 22 --yes, \
+                       /usr/local/sbin/vampn celldel 23 --yes, \
+                       /usr/local/sbin/vampn celldel 24 --yes, \
+                       /usr/local/sbin/vampn celldel 25 --yes, \
+                       /usr/local/sbin/vampn celldel 26 --yes, \
+                       /usr/local/sbin/vampn celldel 27 --yes, \
+                       /usr/local/sbin/vampn celldel 28 --yes, \
+                       /usr/local/sbin/vampn celldel 29 --yes, \
+                       /usr/local/sbin/vampn celldel 30 --yes
 vampn ALL=(root) NOPASSWD: VAMPN_API

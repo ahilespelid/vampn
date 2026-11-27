@@ -131,6 +131,66 @@ export function notificationStatus(n: AppNotification): {label: string; tone: To
   return {label: 'создано', tone: 'muted'};
 }
 
+/** Размер: «512 Б», «12,3 КБ», «5,43 МБ», «1,25 ГБ». Ноль и мусор - «0 МБ». */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 МБ';
+  }
+  const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1023.5 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  if (index === 0) {
+    return `${Math.round(value)} Б`;
+  }
+  const digits = value < 10 ? 2 : value < 100 ? 1 : 0;
+  return `${value.toFixed(digits).replace('.', ',')} ${units[index]}`;
+}
+
+/** Давность: «только что», «5 мин назад», «3 ч назад»; старше суток - дата; нет времени - «никогда». */
+export function formatAgo(iso: string | null | undefined, now: number = Date.now()): string {
+  if (!iso) {
+    return 'никогда';
+  }
+  const ms = new Date(iso).getTime();
+  if (Number.isNaN(ms)) {
+    return '—';
+  }
+  const seconds = Math.max(0, Math.round((now - ms) / 1000));
+  if (seconds < 60) {
+    return 'только что';
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} мин назад`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours} ч назад` : formatDate(iso);
+}
+
+/** День из «2026-11-24» в «24.11». */
+export function formatDay(day: string): string {
+  const match = /^\d{4}-(\d\d)-(\d\d)$/.exec(day);
+  return match ? `${match[2]}.${match[1]}` : day;
+}
+
+/** Почему ключа больше нет: коды из базы людям не показываем. */
+export function removedReasonLabel(reason: string | null | undefined): string {
+  switch (reason) {
+    case 'revoked_in_app':
+      return 'отозван в приложении';
+    case 'removed_from_file':
+      return 'убран из файла пользователей';
+    case 'revoked_in_db':
+      return 'отозван в базе';
+    default:
+      return reason ?? '';
+  }
+}
+
 /** Время суток с секундами: 14:05:09. */
 export function formatClock(ms: number): string {
   const date = new Date(ms);

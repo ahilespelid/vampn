@@ -63,7 +63,7 @@ res=$( (home_peers) 2>&1 ); code=$?
 [[ $code -ne 0 && $res == *"VPN-сервер не ответил"* ]] && ok "home_peers: нет ответа сервера - ошибка с понятным текстом" || bad "home_peers: код $code, вывод: $res"
 
 # peers разрешён во всех списках и ничего не меняет
-[[ $(grep -c 'users-push|list|peers|status|selfupdate)' "$SRC") -eq 1 ]] && ok "peers в списке VPN-сервера (remote)" || bad "peers нет в списке VPN-сервера"
+[[ $(grep -c 'userspush|list|peers|status|selfupdate)' "$SRC") -eq 1 ]] && ok "peers в списке VPN-сервера (remote)" || bad "peers нет в списке VPN-сервера"
 [[ $(grep -c 'on|off|peers|status|selfupdate)' "$SRC") -eq 1 ]] && ok "peers в списке аварийного сервера (remote)" || bad "peers нет в списке аварийного сервера"
 grep -q '^    peers)  home_peers ;;' "$SRC" && ok "peers в команде homeserv" || bad "peers нет в команде homeserv"
 grep -q '^    peers)  data_init; users_peers ;;' "$SRC" && ok "peers в командах серверов" || bad "peers нет в командах серверов"

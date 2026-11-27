@@ -4,10 +4,11 @@ import Svg, {Circle, Path} from 'react-native-svg';
 
 import {useAuth} from '../auth';
 import {describeError} from '../format';
-import {parseEmergency, parseStatus, type ServiceState} from '../serviceStatus';
+import {cabinetState, parseCabinets, parseEmergency, parseStatus, type Cabinet, type ServiceState} from '../serviceStatus';
 import {fontStyle, useTheme} from '../theme';
+import {ServersCard} from '../ServersCard';
 import {useReconnect} from '../useReconnect';
-import {Body, Btn, Card, ErrorNote, IconBadge, Label, Page, Segmented, Toggle} from '../ui';
+import {Body, Btn, Card, ErrorNote, IconBadge, Label, Page, Pill, Segmented, Toggle} from '../ui';
 
 const RADAR_RINGS = [45, 70, 95, 120, 145];
 
@@ -56,6 +57,8 @@ export function HomeScreen() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
   const [mode, setMode] = useState<'rotate' | 'force'>('rotate');
+  // На каком кабинете Timeweb действовать: на активном (как раньше), на основном или на запасном. Выбор только у суперадмина.
+  const [target, setTarget] = useState<'auto' | '1' | '2'>('auto');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -78,6 +81,9 @@ export function HomeScreen() {
   useReconnect(load);
 
   const info = useMemo(() => parseStatus(status), [status]);
+  const cabinets = useMemo(() => parseCabinets(status), [status]);
+  const multi = isAdmin && cabinets.length > 1;
+  const chosen = multi && target !== 'auto' ? cabinets.find(c => String(c.server) === target) : undefined;
   const emergencyState = useMemo(() => parseEmergency(emergency), [emergency]);
 
   // Что ушло на сервер и что он ответил, показывает строка журнала внизу экрана (ServerLogBar).
@@ -96,8 +102,18 @@ export function HomeScreen() {
 
   const rotate = () => {
     const force = mode === 'force';
-    const go = () => act('rotate', () => api.rotate(force));
-    if (force) {
+    const other = chosen && !chosen.active ? chosen : undefined; // выбран не тот кабинет, на котором сейчас туннель
+    const go = () => act('rotate', () => api.rotate(force, chosen?.server));
+    if (other) {
+      Alert.alert(
+        `Сменить IP на кабинете «${other.label}»?`,
+        `Если туннель поднимется, этот кабинет станет активным, и все подключённые получат новые ключи.${force ? ' Смена пойдёт принудительно, даже если адрес не заблокирован.' : ''}`,
+        [
+          {text: 'Отмена', style: 'cancel'},
+          {text: 'Сменить', style: 'destructive', onPress: go},
+        ],
+      );
+    } else if (force) {
       Alert.alert('Сменить IP принудительно?', 'Адрес сервера сменится сразу, даже если он не заблокирован. Все подключённые получат новые ключи.', [
         {text: 'Отмена', style: 'cancel'},
         {text: 'Сменить', style: 'destructive', onPress: go},
@@ -105,6 +121,17 @@ export function HomeScreen() {
     } else {
       go();
     }
+  };
+
+  const switchCabinet = (cabinet: Cabinet) => {
+    Alert.alert(
+      `Перейти на кабинет «${cabinet.label}»?`,
+      'Туннель переключится на адрес этого кабинета, IP не меняется. Ключи не рассылаются: у кого в ключе прежний адрес, подключение заработает, только пока тот адрес доступен.',
+      [
+        {text: 'Отмена', style: 'cancel'},
+        {text: 'Перейти', style: 'destructive', onPress: () => act('use', () => api.useServer(cabinet.server))},
+      ],
+    );
   };
 
   const reboot = () => {
@@ -156,6 +183,57 @@ export function HomeScreen() {
         </View>
       </Card>
 
+      {multi ? (
+        <Card style={{gap: 14}}>
+          <Label>кабинеты Timeweb</Label>
+          {cabinets.map((c, index) => {
+            const st = cabinetState(c.state);
+            return (
+              <View
+                key={c.server}
+                testID={`cabinet-${c.server}`}
+                style={{gap: 4, paddingTop: index ? 14 : 0, borderTopWidth: index ? 1 : 0, borderTopColor: t.border}}>
+                <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8}}>
+                  <Body weight="700">{c.label}</Body>
+                  <View style={{flexDirection: 'row', gap: 6}}>
+                    {c.active ? <Pill text="активный" tone="signal" /> : null}
+                    <Pill text={st.text} tone={st.tone} />
+                  </View>
+                </View>
+                <Body mono muted style={{fontSize: 13, lineHeight: 19}}>
+                  {c.ips.join(' · ') || 'IPv4 нет'}
+                </Body>
+                <Body muted style={{fontSize: 12, lineHeight: 18}}>
+                  новых IP за сутки {c.used} из {c.limit}
+                  {c.note ? ` · ${c.note}` : ''}
+                </Body>
+              </View>
+            );
+          })}
+          <Body muted>Где действовать: смена IP ниже и переход туннеля идут на выбранный кабинет. «Активный» - как обычно.</Body>
+          <Segmented
+            value={target}
+            onChange={setTarget}
+            options={[
+              {value: 'auto', label: 'активный'},
+              {value: '1', label: 'основной'},
+              {value: '2', label: 'запасной'},
+            ]}
+          />
+          {chosen && !chosen.active ? (
+            <Btn
+              testID="use-cabinet"
+              kind="ghost"
+              arrow
+              title={busy === 'use' ? 'Переключаю…' : `Перейти на «${chosen.label}»`}
+              onPress={() => switchCabinet(chosen)}
+              busy={busy === 'use'}
+              disabled={!!busy}
+            />
+          ) : null}
+        </Card>
+      ) : null}
+
       <Card style={{gap: 16}}>
         <View style={{flexDirection: 'row', alignItems: 'center', gap: 12}}>
           <IconBadge name="refresh" tone="signal" />
@@ -180,7 +258,7 @@ export function HomeScreen() {
           kind="signal"
           icon="refresh"
           arrow
-          title={busy === 'rotate' ? 'Меняю IP, ждём сервер…' : 'Сменить IP-адрес'}
+          title={busy === 'rotate' ? 'Меняю IP, ждём сервер…' : chosen ? `Сменить IP: ${chosen.label}` : 'Сменить IP-адрес'}
           onPress={rotate}
           busy={busy === 'rotate'}
           disabled={!!busy}
@@ -221,6 +299,8 @@ export function HomeScreen() {
           ) : null}
         </Card>
       ) : null}
+
+      {isAdmin ? <ServersCard /> : null}
 
       <Card style={{gap: 8}}>
         <Label>состояние</Label>

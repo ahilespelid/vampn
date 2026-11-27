@@ -25,9 +25,12 @@
 #   vampn deploy           отправить этот скрипт на Бостон и активный VPN-сервер заново (сам отправляется, когда скрипт изменился)
 #   vampn cells            ячейки: номер, имя, IP, пользователей/лимит, рукопожатие, состояние (таблица через табуляцию)
 #   vampn account add ИМЯ  добавить кабинет Timeweb (токен на stdin); account list|default|del
-#   vampn spawn [КАБИНЕТ]  арендовать сервер vampn_N (Timeweb, Амстердам, самый дешёвый, Debian) и развернуть ячейку; ход: vampn spawn-status
-#   vampn cell-del N --yes удалить ячейку и её сервер
-#   vampn install-script   установочный бандл для чистого Debian (install.sh)
+#   vampn spawn [КАБИНЕТ]  арендовать сервер vampn_N (Timeweb, Амстердам, самый дешёвый, Debian) и развернуть ячейку; ход: vampn spawnstatus
+#   (spawn сам удаляет нерабочий сервер и ячейку, если развёртывание упало, и берёт новый сервер - до 5 попыток)
+#   vampn spawnresume N   продолжить развёртывание на уже созданном сервере ячейки N (если spawn упал, а сервер остался)
+#   vampn celldel N --yes удалить ячейку и её сервер
+#   vampn init            на новом чистом Debian: поставить все нужные пакеты (curl, nftables, python3, dkms, модуль AmneziaWG, утилиты awg и т.д.)
+#   vampn installscript   установочный бандл для чистого Debian (install.sh)
 #   VAMPN_CELL=N vampn ... любая команда homeserv для ячейки N (status, rotate, users, mirror, resendall ...)
 #   vampn emergency on     включить аварийный канал (Бостон): VPN и Telegram через него, ключи на почту
 #   vampn emergency off    выключить вручную (сам выключается, когда Timeweb 3 минуты снова отвечает)
@@ -36,8 +39,8 @@
 #   vampn help             эта справка
 # Настройки (homeserv, /etc/vampn): timeweb.env - токен Timeweb, secrets.env - почта,
 #   users.conf - пользователи (ИМЯ ПОЧТА; сохранили - через минуту применено, ключи разосланы).
-# Служебные (их вызывают таймер и ключи между серверами): check, users-push, remote, mail,
-#   alert, conf, qr, _mail, _endpoint-change, selfupdate. Журнал отправки писем: /var/lib/vampn/mail-status.tsv.
+# Служебные (их вызывают таймер и ключи между серверами): check, userspush, remote, mail,
+#   alert, conf, qr, mailsend, endpointchange, selfupdate. Журнал отправки писем: /var/lib/vampn/mail-status.tsv.
 set -uo pipefail
 SELF=/usr/local/sbin/vampn
 # Ячейка = отдельный VPN-сервер со своими ключами, адресом и туннелем (до ~1000 клиентов на ячейку). Ячейка 1 - исходная,
@@ -60,6 +63,7 @@ AWG_DIR=${VAMPN_AWG_DIR:-/etc/amnezia/amneziawg}
 if   [[ -f ${VAMPN_ETC:-/etc/vampn}/role ]];     then ROLE=$(< "${VAMPN_ETC:-/etc/vampn}/role")   # emergency - Бостон
 elif [[ -f $AWG_DIR/awg0.conf ]];                then ROLE=server
 elif [[ -f $AWG_DIR/$TUN_IFACE.conf ]];          then ROLE=home
+elif [[ ${1:-} == init ]];                      then ROLE=new   # чистый сервер: init ставит пакеты ещё до настройки
 else echo "vampn: не понял, где запущен (нет конфига AmneziaWG)" >&2; exit 1; fi
 
 now() { date +%s; }
@@ -780,7 +784,7 @@ srv_status() {
   echo "интернет     : $(srv_inet_ok && echo есть || echo НЕТ), минут без него: $(get net_fails)"
   echo "awg0         : $(ip link show awg0 >/dev/null 2>&1 && echo поднят || echo НЕТ), nftables: $(nft list table inet filter >/dev/null 2>&1 && echo загружен || echo НЕТ)"
   echo "рассылка     : $([[ -f $BASE/mail_pending ]] && echo "не завершена, дошло $(wc -l < "$BASE/mail_pending")" || echo ok)"
-  echo "журнал       :"; tail -6 "$STATE/vampn.log" 2>/dev/null | sed 's/^/  /'
+  echo "журнал       :"; { tail -6 "$STATE/vampn.log" 2>/dev/null || true; } | sed 's/^/  /'
 }
 
 srv_users_push() {  # список пользователей приходит с homeserv на stdin
@@ -859,17 +863,21 @@ server_main() {
     list)   data_init; users_list ;;
     peers)  data_init; users_peers ;;
     reissue|resend|link) data_init; srv_user_cmd "$@" ;;
-    users-push) data_init; srv_users_push ;;
-    expect-ip)  data_init; srv_expect_ip "${2:-}" ;;
+    userspush) data_init; srv_users_push ;;
+    expectip)  data_init; srv_expect_ip "${2:-}" ;;
     unpin)      data_init; srv_unpin ;;
     snapshot)   data_init; srv_snapshot ;;
-    home-init)  data_init; srv_home_init ;;     # только локально (не в списке remote): ставит install.sh
-    home-conf)  data_init; srv_home_conf ;;
+    homeinit)  data_init; srv_home_init ;;     # только локально (не в списке remote): ставит install.sh
+    homeconf)  data_init; srv_home_conf ;;
     remote)  # принудительная команда ключа homeserv: разрешён только этот список действий
-      local a; read -r -a a <<<"${SSH_ORIGINAL_COMMAND:-users-push}"
+      local a; read -r -a a <<<"${SSH_ORIGINAL_COMMAND:-userspush}"
+      case ${a[0]:-} in    # старые имена с дефисом принимаются только от ещё не обновлённого homeserv
+        users-push) a[0]=userspush ;;
+        expect-ip)  a[0]=expectip ;;
+      esac
       case ${a[0]:-} in
-        users-push|list|peers|status|selfupdate) exec "$SELF" "${a[0]}" ;;
-        reissue|resend|link|expect-ip)    exec "$SELF" "${a[0]}" "${a[1]:-}" ;;
+        userspush|list|peers|status|selfupdate) exec "$SELF" "${a[0]}" ;;
+        reissue|resend|link|expectip)    exec "$SELF" "${a[0]}" "${a[1]:-}" ;;
         unpin)    exec "$SELF" unpin ;;
         snapshot) exec "$SELF" snapshot ;;
         *) die "команда не разрешена: ${a[0]:-}" ;;
@@ -915,7 +923,7 @@ em_off() {
 em_status() {
   echo "режим        : $([[ -f $STATE/emergency_on ]] && echo "АВАРИЙНЫЙ (VPN работает)" || echo "обычный (VPN выключен)")"
   echo "awg0         : $(ip link show awg0 >/dev/null 2>&1 && echo поднят || echo нет), порт открыт: $(em_port_open && echo да || echo нет)"
-  echo "журнал       :"; tail -4 "$STATE/vampn.log" 2>/dev/null | sed 's/^/  /'
+  echo "журнал       :"; { tail -4 "$STATE/vampn.log" 2>/dev/null || true; } | sed 's/^/  /'
 }
 emergency_main() {
   case ${1:-} in
@@ -1115,15 +1123,15 @@ push_expect() { # [IP] - сообщить активному VPN-серверу,
   [[ -n $ip ]] || ip=$(main_ipv4); [[ -n $ip ]] || return 1
   last=$(get "expect_pushed$TSUF" "none 0")
   [[ -z ${1:-} && ${last% *} == "$ip" ]] && (( t - ${last#* } < EXPECT_EVERY )) && return 0
-  if remote "expect-ip $ip" >/dev/null 2>&1; then put "expect_pushed$TSUF" "$ip $t"; return 0; fi
+  if remote "expectip $ip" >/dev/null 2>&1; then put "expect_pushed$TSUF" "$ip $t"; return 0; fi
   return 1
 }
 announce_ip() { # СТАРЫЙ НОВЫЙ - перед удалением старого IP сообщить серверу новый: активному - через туннель, неактивному - прямо на старый адрес (порт 22, если открыт)
   local old=$1 new=$2 out=""
   if [[ $n == "$(get active_target 1)" ]]; then
-    alive && remote "expect-ip $new" >/dev/null 2>&1 && { log "[$(tw_label)] серверу сообщён новый адрес $new (через туннель)"; return 0; }
+    alive && remote "expectip $new" >/dev/null 2>&1 && { log "[$(tw_label)] серверу сообщён новый адрес $new (через туннель)"; return 0; }
   elif [[ -n $old ]]; then
-    out=$("${SSH_SRV[@]}" -i /etc/vampn/users.key -o HostKeyAlias=$SRV_TIP -o ConnectTimeout=8 "root@$old" "expect-ip $new" </dev/null 2>&1) \
+    out=$("${SSH_SRV[@]}" -i /etc/vampn/users.key -o HostKeyAlias=$SRV_TIP -o ConnectTimeout=8 "root@$old" "expectip $new" </dev/null 2>&1) \
       && { log "[$(tw_label)] серверу сообщён новый адрес $new (напрямую на $old)"; return 0; }
   fi
   [[ -n $out ]] && out=" [$(tail -c 80 <<<"$out" | tr '\n' ' ')]"
@@ -1161,7 +1169,7 @@ push_users() { # [force] - users.conf изменился -> отправить �
 
 mail_from_mirror() { # IP - разослать ключи с новым адресом по копии данных
   [[ -f $MIRROR/server.env ]] || { log "копии данных нет - рассылку сделает сам сервер, когда поднимется"; return 1; }
-  if VAMPN_BASE=$MIRROR "$SELF" _endpoint-change "$1" >>"$STATE/vampn.log" 2>&1; then
+  if VAMPN_BASE=$MIRROR "$SELF" endpointchange "$1" >>"$STATE/vampn.log" 2>&1; then
     log "ключи с адресом $1 разосланы с homeserv"
     return 0
   fi
@@ -1216,7 +1224,7 @@ emergency_on() { # [--quiet] - --quiet: без писем пользовател
   [[ ${1:-} == --quiet ]] && return 0
   local d=$STATE/em-mail
   rm -rf "$d"; cp -a "$MIRROR" "$d"; echo "$EM_HOST" > "$d/endpoint"; rm -f "$d/mail_pending"
-  VAMPN_KIND=emergency VAMPN_BASE=$d "$SELF" _mail --all --reason \
+  VAMPN_KIND=emergency VAMPN_BASE=$d "$SELF" mailsend --all --reason \
     "Основной VPN-сервер сейчас недоступен, включён аварийный канал. Добавьте этот ключ в AmneziaVPN и подключайтесь через него. Когда основной сервер заработает, придёт письмо." \
     >>"$STATE/vampn.log" 2>&1 && log "аварийные ключи разосланы" || log "рассылка аварийных ключей с ошибками"
 }
@@ -1235,7 +1243,7 @@ emergency_off() { # [--quiet]
   printf '%s\n' "Здравствуйте!" "" \
     "Основной VPN-сервер снова работает. Переключитесь в AmneziaVPN на профиль {profile}." \
     "Аварийный профиль {profile}-emergency можно удалить: он заработает, только если снова включат аварийный режим (тогда придёт письмо)." \
-    | VAMPN_BASE=$MIRROR "$SELF" _mail --notice "Ваш VPN: основной сервер снова работает" >>"$STATE/vampn.log" 2>&1 \
+    | VAMPN_BASE=$MIRROR "$SELF" mailsend --notice "Ваш VPN: основной сервер снова работает" >>"$STATE/vampn.log" 2>&1 \
     && log "письма о возврате разосланы" || log "письма о возврате: с ошибками"
 }
 
@@ -1528,8 +1536,8 @@ status() {
   echo "аварийный    : $(em_active && echo "ВКЛЮЧЁН - трафик через Бостон" || echo "выключен")"
   local lm; lm=$(get last_mirror)
   echo "копия данных : $( ((lm)) && date -d @"$lm" '+%F %T' || echo нет), пользователей $(ls "$MIRROR"/clients/*.env 2>/dev/null | wc -l)"
-  echo "смены IP     :"; tail -5 "$STATE/rotations" 2>/dev/null | while read -r t o n; do echo "  $(date -d @"$t" '+%F %T') $o -> $n"; done
-  echo "журнал       :"; tail -6 "$STATE/vampn.log" 2>/dev/null | sed 's/^/  /'
+  echo "смены IP     :"; { tail -5 "$STATE/rotations" 2>/dev/null || true; } | while read -r t o n; do echo "  $(date -d @"$t" '+%F %T') $o -> $n"; done
+  echo "журнал       :"; { tail -6 "$STATE/vampn.log" 2>/dev/null || true; } | sed 's/^/  /'
 }
 
 # ---------- надёжность рассылки ключей ----------
@@ -1568,7 +1576,7 @@ mail_watch() {    # сторож: неудачные письма с ключо�
     fi
     (( $(now) - ts >= MAIL_RETRY_AFTER )) || continue
     put "mail_retry_$n" $(( cnt + 1 ))
-    if VAMPN_BASE=$MIRROR "$SELF" _mail "$n" </dev/null >>"$STATE/vampn.log" 2>&1; then
+    if VAMPN_BASE=$MIRROR "$SELF" mailsend "$n" </dev/null >>"$STATE/vampn.log" 2>&1; then
       log "повтор ключа $n: ушёл"; rm -f "$STATE/mail_retry_$n" "$STATE/mail_gaveup_$n"
     else
       log "повтор ключа $n: опять не ушёл ($(( cnt + 1 ))/$MAIL_RETRY_MAX)"
@@ -1592,7 +1600,7 @@ resend_all() {    # vampn resendall: текущий ключ всем из users
   for pass in 1 2; do
     bad=()
     for n in "${todo[@]}"; do
-      if VAMPN_BASE=$MIRROR "$SELF" _mail "$n" </dev/null >>"$STATE/vampn.log" 2>&1; then
+      if VAMPN_BASE=$MIRROR "$SELF" mailsend "$n" </dev/null >>"$STATE/vampn.log" 2>&1; then
         echo "  $n: принято почтовым сервером"; ok=$(( ok + 1 ))
       else
         echo "  $n: НЕ УШЛО"; bad+=("$n")
@@ -1616,7 +1624,7 @@ key_local() {     # link|conf ИМЯ - из копии данных на homeser
   em_active && die "сейчас аварийный режим: основной сервер недоступен, эта команда работает с ним"
   [[ -f $MIRROR/clients/$n.env && $(cat "$MIRROR/endpoint" 2>/dev/null) == "$(tun_endpoint)" ]] || return 1
   case $what in
-    link) VAMPN_BASE=$MIRROR "$SELF" _mail --link "$n" ;;
+    link) VAMPN_BASE=$MIRROR "$SELF" mailsend --link "$n" ;;
     conf) VAMPN_BASE=$MIRROR "$SELF" conf "$n" ;;
   esac
 }
@@ -1645,9 +1653,10 @@ mailstatus() {    # vampn mailstatus: по каждому из users.conf - по
 #   vampn account add ИМЯ              добавить кабинет Timeweb: токен API читается из stdin (в аргументах и журналах его нет)
 #   vampn account list|del ИМЯ         кабинеты (без токенов) / убрать кабинет (если им не пользуется ни одна ячейка)
 #   vampn spawn [КАБИНЕТ]              арендовать самый дешёвый сервер в Амстердаме (Debian) под именем vampn_N, развернуть install.sh,
-#                                      поднять туннель и сторожа новой ячейки; идёт в фоне, ход - vampn spawn-status
-#   vampn spawn-status [ЧИСЛО строк]   состояние и журнал последнего запуска spawn
-#   vampn cell-del N --yes [--force]   удалить ячейку и её сервер в Timeweb (отказ, пока в ячейке есть пользователи, без --force)
+#                                      поднять туннель и сторожа новой ячейки; идёт в фоне, ход - vampn spawnstatus
+#   vampn spawnresume N               продолжить развёртывание на уже созданном сервере ячейки N (если spawn упал, а сервер остался)
+#   vampn spawnstatus [ЧИСЛО строк]   состояние и журнал последнего запуска spawn
+#   vampn celldel N --yes [--force]   удалить ячейку и её сервер в Timeweb (отказ, пока в ячейке есть пользователи, без --force)
 # Лимитов по деньгам нет (так решено): выбирается самый дешёвый тариф локации nl-1 (Amsterdam) и образ Debian 13 (или новее 12).
 # ====================================================================================================
 ETC_DIR=${VAMPN_ETC:-/etc/vampn}
@@ -1708,7 +1717,7 @@ account_main() {
     default) acct_file "$name" >/dev/null; [[ -f $(acct_file "$name") ]] || die "нет кабинета $name"; echo "$name" > "$ACCT_DIR/default"; echo "по умолчанию: $name" ;;
     del)
       valid_acct "$name"; f=$ACCT_DIR/$name.env; [[ -f $f ]] || die "нет кабинета $name"
-      grep -qx "CELL_ACCOUNT=$name" "$CELLS_DIR"/*.env 2>/dev/null && die "кабинетом $name пользуется ячейка: сначала vampn cell-del"
+      grep -qx "CELL_ACCOUNT=$name" "$CELLS_DIR"/*.env 2>/dev/null && die "кабинетом $name пользуется ячейка: сначала vampn celldel"
       rm -f "$f"; [[ $(cat "$ACCT_DIR/default" 2>/dev/null) == "$name" ]] && rm -f "$ACCT_DIR/default"
       echo "кабинет $name убран" ;;
     *) die "vampn account add ИМЯ (токен на stdin) | list | default ИМЯ | del ИМЯ" ;;
@@ -1743,7 +1752,12 @@ sp_log() { echo "$(date '+%F %T') $*" >> "$SPAWN_DIR/job.log"; }
 sp_step() { SPAWN_STEP=$1; echo "running: $1" > "$SPAWN_DIR/job.state"; sp_log "$1"; }
 sp_fail() { echo "failed: ${SPAWN_STEP:-?}: $*" > "$SPAWN_DIR/job.state"; sp_log "ОШИБКА на шаге «${SPAWN_STEP:-?}»: $*"
   [[ -n ${SPAWN_CELL:-} && -f $CELLS_DIR/$SPAWN_CELL.env ]] && sed -i 's/^CELL_STATE=.*/CELL_STATE=ошибка/' "$CELLS_DIR/$SPAWN_CELL.env"
-  sp_notify "аренда сервера не удалась на шаге «${SPAWN_STEP:-?}»: $*${SPAWN_CELL:+. Ячейка $SPAWN_CELL и сервер в Timeweb оставлены для разбора (vampn spawn-status, vampn cell-del $SPAWN_CELL --yes)}"
+  [[ -n ${SPAWN_CELL:-} ]] && echo "$SPAWN_CELL" > "$SPAWN_DIR/last_cell"
+  if [[ -n ${SPAWN_AUTO:-} && -n ${SPAWN_CELL:-} ]]; then
+    sp_notify "развёртывание не удалось на шаге «${SPAWN_STEP:-?}»: $*. Сервер ячейки $SPAWN_CELL нерабочий - удаляю его"
+  else
+    sp_notify "аренда сервера не удалась на шаге «${SPAWN_STEP:-?}»: $*${SPAWN_CELL:+. Ячейка $SPAWN_CELL и сервер в Timeweb оставлены для разбора (vampn spawnstatus, vampn celldel $SPAWN_CELL --yes)}"
+  fi
   exit 1; }
 sp_notify() { # Telegram и письмо без обращения к состоянию какой-либо ячейки
   tg notify alerts "🛡 $1" >/dev/null 2>&1 || true
@@ -1761,12 +1775,59 @@ spawn_pick() { # ТОКЕН -> "preset_id os_id" или ошибка
   echo "$preset $os"
 }
 
+sp_udp_check() { # IP - доходит ли UDP от homeserv до сервера и обратно (часть адресов Timeweb режется по пути: туннель на таком не поднимется, а ставить на него бессмысленно)
+  local ip=$1 port=45331 srvpid rc
+  "${ssh[@]}" "root@$ip" "python3 - $port" >/dev/null 2>&1 <<'PY' &
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("0.0.0.0", int(sys.argv[1]))); s.settimeout(45)
+try:
+    while True:
+        d, a = s.recvfrom(100); s.sendto(b"ok", a)
+except Exception:
+    pass
+PY
+  srvpid=$!
+  sleep ${SPAWN_RETRY_WAIT:-5}
+  python3 - "$ip" "$port" <<'PY'
+import socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(1)
+end = time.time() + 30
+while time.time() < end:
+    s.sendto(b"ping", (sys.argv[1], int(sys.argv[2])))
+    try:
+        d, a = s.recvfrom(100)
+        if d == b"ok": sys.exit(0)
+    except socket.timeout:
+        pass
+sys.exit(1)
+PY
+  rc=$?
+  kill $srvpid 2>/dev/null; wait $srvpid 2>/dev/null
+  return $rc
+}
+
 spawn_run() { # КАБИНЕТ - сама аренда и развёртывание (в фоне)
   local acct=$1 tok n name net preset os keyid pub resp sid ip st i ssh key_root home_pub out port pubkey relay_pub tmp pay
   SPAWN_CELL=""
   install -d -m 700 "$SPAWN_DIR" "$CELLS_DIR"
   exec 7>"$SPAWN_DIR/lock"; flock -n 7 || { echo "уже идёт другая аренда" >&2; exit 1; }
-  : > "$SPAWN_DIR/job.log"
+  [[ -n ${SPAWN_KEEPLOG:-} ]] || : > "$SPAWN_DIR/job.log"
+  if [[ -n ${SPAWN_RESUME:-} ]]; then
+    # продолжить на уже созданном сервере ячейки N (прошлый запуск упал, например на ожидании ssh): сервер не создаём
+    n=$SPAWN_RESUME; SPAWN_CELL=$n
+    sp_step "продолжение: ячейка $n"
+    [[ $n =~ ^[0-9]+$ && -f $CELLS_DIR/$n.env && -f $CELLS_DIR/$n.timeweb.env ]] || sp_fail "нет ячейки $n для продолжения"
+    name=$(sed -n 's/^CELL_NAME=//p' "$CELLS_DIR/$n.env"); net=$(sed -n 's/^CELL_NET=//p' "$CELLS_DIR/$n.env")
+    ip=$(sed -n 's/^CELL_IP=//p' "$CELLS_DIR/$n.env")
+    tok=$(sed -n 's/^TIMEWEB_TOKEN=//p' "$CELLS_DIR/$n.timeweb.env"); sid=$(sed -n 's/^TIMEWEB_SERVER_ID=//p' "$CELLS_DIR/$n.timeweb.env")
+    [[ -n $name && -n $net && -n $tok && -n $sid ]] || sp_fail "в файлах ячейки $n не хватает данных"
+    resp=$(twa "$tok" GET "/servers/$sid" 2>/dev/null) || true
+    st=$(jq -r '[.server.networks[]?.ips[]? | select(.type == "ipv4")] | (map(select(.is_main)) + .)[0].ip // empty' <<<"$resp" 2>/dev/null)
+    [[ -n $st ]] && ip=$st
+    [[ -n $ip ]] || sp_fail "у сервера ячейки $n нет IPv4"
+    sed -i "s|^CELL_IP=.*|CELL_IP=$ip|; s/^CELL_STATE=.*/CELL_STATE=создаётся/" "$CELLS_DIR/$n.env"
+    sp_log "ячейка $n, сервер $name (id $sid), IPv4 $ip, сеть $net.0/22"
+  else
   sp_step "проверка кабинета $acct"
   tok=$(acct_token "$acct") && [[ -n $tok ]] || sp_fail "нет токена кабинета $acct (vampn account add)"
   twa "$tok" GET /account/finances | jq -e '.finances' >/dev/null 2>&1 || sp_fail "Timeweb не принял токен кабинета $acct"
@@ -1805,17 +1866,33 @@ spawn_run() { # КАБИНЕТ - сама аренда и развёртыван
   for (( i = 0; i < 90; i++ )); do
     resp=$(twa "$tok" GET "/servers/$sid"); st=$(jq -r '.server.status // empty' <<<"$resp")
     ip=$(jq -r '[.server.networks[]?.ips[]? | select(.type == "ipv4")] | (map(select(.is_main)) + .)[0].ip // empty' <<<"$resp")
-    [[ $st == on && -n $ip ]] && break; sleep 10
+    [[ $st == on && -n $ip ]] && break
+    # Timeweb создаёт сервер без адреса: когда сервер включился, а IPv4 нет, просим его один раз (так же, как при смене IP)
+    if [[ $st == on && -z $ip && -z ${ipreq:-} ]]; then
+      sp_log "сервер включился, но адреса нет: запрашиваю IPv4"
+      r=$(twa "$tok" POST "/servers/$sid/ips" '{"type":"ipv4"}'); ipreq=1
+      jq -e '.server_ip.ip' >/dev/null 2>&1 <<<"$r" || sp_log "Timeweb ответил на запрос IPv4: $(jq -r '.message // empty' <<<"$r" 2>/dev/null | head -c 200)"
+    fi
+    sleep ${SPAWN_POLL:-10}
   done
   [[ $st == on && -n $ip ]] || sp_fail "сервер не запустился за 15 минут (статус: ${st:-?}, ip: ${ip:-нет})"
   sed -i "s|^CELL_IP=.*|CELL_IP=$ip|" "$CELLS_DIR/$n.env"; sp_log "запущен, IPv4 $ip"
+  fi
 
-  ssh=(ssh -T -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=10 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
-       -o UserKnownHostsFile="$CELLS_DIR/$n.known_hosts_public" -i "$ETC_DIR/spawn.key")
+  # канал homeserv -> Timeweb бывает с потерями пакетов (часть SYN пропадает): повторы соединения и «живой» ssh, каждый шаг с повтором
+  ssh=(ssh -T -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=5 -o ServerAliveInterval=10 -o ServerAliveCountMax=12
+       -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$CELLS_DIR/$n.known_hosts_public" -i "$ETC_DIR/spawn.key")
   sp_step "ожидание ssh"
-  for (( i = 0; i < 60; i++ )); do "${ssh[@]}" "root@$ip" true </dev/null 2>/dev/null && break; sleep 5; done
-  "${ssh[@]}" "root@$ip" true </dev/null 2>/dev/null || sp_fail "ssh на $ip не отвечает за 5 минут"
-  "${ssh[@]}" "root@$ip" 'grep -q "^ID=debian" /etc/os-release && grep -q "^VERSION_ID=\"1[2-9]\"" /etc/os-release' </dev/null || sp_fail "на сервере не Debian 12+"
+  for (( i = 0; i < 120; i++ )); do "${ssh[@]}" "root@$ip" true </dev/null 2>/dev/null && break; sleep 5; done
+  (( i < 120 )) || sp_fail "ssh на $ip не отвечает за 10 минут"
+  local deb=1
+  for (( i = 0; i < 6; i++ )); do
+    "${ssh[@]}" "root@$ip" 'grep -q "^ID=debian" /etc/os-release && grep -q "^VERSION_ID=\"1[2-9]\"" /etc/os-release' </dev/null 2>/dev/null; deb=$?
+    (( deb == 0 || deb == 1 )) && break; sleep ${SPAWN_RETRY_WAIT:-5}
+  done
+  (( deb == 0 )) || { (( deb == 1 )) && sp_fail "на сервере не Debian 12+" || sp_fail "не удалось проверить систему сервера (ssh обрывается)"; }
+  sp_step "проверка UDP от homeserv до сервера"
+  sp_udp_check "$ip" || sp_fail "UDP от homeserv до $ip не проходит (адрес режется по пути): туннель на нём не поднимется"
 
   sp_step "подготовка бандла"
   pay=$(mktemp -d); tmp=$pay
@@ -1832,8 +1909,12 @@ spawn_run() { # КАБИНЕТ - сама аренда и развёртыван
   while read -r k; do [[ -n $k ]] && args+=(--admin-key "$k vampn-admin"); done <<<"$ak"
   sp_step "установка на $name ($ip): AmneziaWG, nftables, sshd, сторож"
   local q; q=$(printf ' %q' "${args[@]}")
-  out=$(tar -C "$pay" -cf - . | "${ssh[@]}" "root@$ip" "rm -rf /root/vampn-bundle && mkdir -p /root/vampn-bundle && tar -C /root/vampn-bundle -xf - && bash /root/vampn-bundle/install.sh$q" 2>&1) \
-    || { sp_log "$(tail -c 1500 <<<"$out")"; rm -rf "$pay"; sp_fail "install.sh завершился с ошибкой"; }
+  # install.sh идемпотентен, поэтому при обрыве связи его безопасно запустить заново (до 3 раз)
+  for (( i = 1; i <= 3; i++ )); do
+    out=$(tar -C "$pay" -cf - . | "${ssh[@]}" "root@$ip" "rm -rf /root/vampn-bundle && mkdir -p /root/vampn-bundle && tar -C /root/vampn-bundle -xf - && bash /root/vampn-bundle/install.sh$q" 2>&1) && break
+    sp_log "install.sh, попытка $i из 3 не удалась: $(tail -c 300 <<<"$out" | tr '\n' ' ')"; (( i < 3 )) && sleep ${SPAWN_RETRY_WAIT:-15}
+  done
+  (( i <= 3 )) || { sp_log "$(tail -c 1500 <<<"$out")"; rm -rf "$pay"; sp_fail "install.sh завершился с ошибкой"; }
   rm -rf "$pay"
   grep -q '^VAMPN_INSTALL_OK=1' <<<"$out" || sp_fail "install.sh не подтвердил установку"
   port=$(sed -n 's/^VAMPN_PORT=//p' <<<"$out"); pubkey=$(sed -n 's/^VAMPN_SERVER_PUBKEY=//p' <<<"$out"); relay_pub=$(sed -n 's/^VAMPN_MAILRELAY_PUB=//p' <<<"$out")
@@ -1843,7 +1924,7 @@ spawn_run() { # КАБИНЕТ - сама аренда и развёртыван
   sp_step "ключ почты сервера на homeserv и конфиг туннеля"
   grep -q " vampn-mailrelay-$n\$" ${HOME_AK:-/root/.ssh/authorized_keys} 2>/dev/null || \
     echo "restrict,from=\"$net.1\",command=\"/usr/local/sbin/vampn mail\" $relay_pub vampn-mailrelay-$n" >> ${HOME_AK:-/root/.ssh/authorized_keys}
-  ( umask 077; "${ssh[@]}" "root@$ip" "/usr/local/sbin/vampn home-conf" </dev/null \
+  ( umask 077; "${ssh[@]}" "root@$ip" "/usr/local/sbin/vampn homeconf" </dev/null \
       | awk -v srv="$net.1" -v ep="$ip:$port" '/^DNS *=/{next} /^AllowedIPs *=/{print "AllowedIPs = " srv "/32"; next} /^Endpoint *=/{print "Endpoint = " ep; next} {print}' \
       > "$AWG_DIR/vampn$n.conf" )
   grep -q '^PrivateKey' "$AWG_DIR/vampn$n.conf" && grep -q "^Endpoint = $ip:$port" "$AWG_DIR/vampn$n.conf" || sp_fail "не удалось получить конфиг туннеля с сервера"
@@ -1901,12 +1982,49 @@ spawn_main() { # [КАБИНЕТ] - запускает аренду в фоне 
   [[ -n $acct ]] || acct=$(acct_default)
   [[ -f $(acct_file "$acct") ]] || die "нет кабинета $acct (vampn account add $acct)"
   install -d -m 700 "$SPAWN_DIR"
-  if ! ( exec 7>"$SPAWN_DIR/lock"; flock -n 7 ); then die "аренда уже идёт (vampn spawn-status)"; fi
+  if ! ( exec 7>"$SPAWN_DIR/lock"; flock -n 7 ); then die "аренда уже идёт (vampn spawnstatus)"; fi
   echo "queued: старт" > "$SPAWN_DIR/job.state"
   if command -v systemd-run >/dev/null 2>&1 && [[ -z ${VAMPN_NO_SYSTEMD:-} ]]; then
-    systemd-run -q --collect --unit "vampn-spawn-$(date +%s)" "$SELF" _spawn "$acct" >/dev/null
-  else nohup setsid "$SELF" _spawn "$acct" >/dev/null 2>&1 </dev/null & fi
-  echo "аренда запущена в фоне (кабинет $acct). Ход: vampn spawn-status"
+    systemd-run -q --collect --unit "vampn-spawn-$(date +%s)" "$SELF" spawnrun "$acct" >/dev/null
+  else nohup setsid "$SELF" spawnrun "$acct" >/dev/null 2>&1 </dev/null & fi
+  echo "аренда запущена в фоне (кабинет $acct). Ход: vampn spawnstatus"
+}
+
+spawn_discard() { # N - нерабочий сервер ячейки N: убрать ключ почты с homeserv, удалить сервер в Timeweb и саму ячейку
+  local c=$1 l
+  sp_log "удаляю нерабочий сервер ячейки $c и саму ячейку"
+  sed -i "/ vampn-mailrelay-$c\$/d" "${HOME_AK:-/root/.ssh/authorized_keys}" 2>/dev/null || true
+  ( cell_del "$c" --yes --force ) 2>&1 | while read -r l; do sp_log "$l"; done
+}
+
+spawn_loop() { # КАБИНЕТ - до SPAWN_TRIES (5) попыток: упало после создания сервера - сервер и ячейка удаляются, берём новый сервер
+  local acct=$1 tries=${SPAWN_TRIES:-5} try cell
+  install -d -m 700 "$SPAWN_DIR" "$CELLS_DIR"
+  for (( try = 1; try <= tries; try++ )); do
+    rm -f "$SPAWN_DIR/last_cell"
+    (( try > 1 )) && { SPAWN_KEEPLOG=1; sp_log "=== попытка $try из $tries: новый сервер ==="; }
+    ( SPAWN_AUTO=1 spawn_run "$acct" )
+    [[ $(cut -d: -f1 "$SPAWN_DIR/job.state" 2>/dev/null) == done ]] && return 0
+    cell=$(cat "$SPAWN_DIR/last_cell" 2>/dev/null || true)
+    [[ -n $cell ]] || return 1        # упало до создания сервера (токен, баланс, тарифы) - новый сервер не поможет
+    spawn_discard "$cell"
+    (( try < tries )) || { sp_notify "после $tries попыток новый сервер развернуть не удалось, лишние серверы удалены. Причина в журнале: vampn spawnstatus"; return 1; }
+  done
+}
+
+spawn_resume_main() { # N - продолжить развёртывание на уже созданном сервере ячейки N (spawn упал, сервер и ячейка остались)
+  local n=${1:-} acct
+  (( CELL == 1 )) || die "spawnresume запускается без VAMPN_CELL"
+  [[ $n =~ ^[0-9]+$ ]] && (( n >= 2 )) || die "нужен номер ячейки: vampn spawnresume N"
+  [[ -f $CELLS_DIR/$n.env && -f $CELLS_DIR/$n.timeweb.env ]] || die "нет ячейки $n"
+  acct=$(sed -n 's/^CELL_ACCOUNT=//p' "$CELLS_DIR/$n.env")
+  install -d -m 700 "$SPAWN_DIR"
+  if ! ( exec 7>"$SPAWN_DIR/lock"; flock -n 7 ); then die "аренда уже идёт (vampn spawnstatus)"; fi
+  echo "queued: продолжение ячейки $n" > "$SPAWN_DIR/job.state"
+  if command -v systemd-run >/dev/null 2>&1 && [[ -z ${VAMPN_NO_SYSTEMD:-} ]]; then
+    systemd-run -q --collect --unit "vampn-spawn-$(date +%s)" -E "SPAWN_RESUME=$n" "$SELF" spawnrun "${acct:-main}" >/dev/null
+  else SPAWN_RESUME=$n nohup setsid "$SELF" spawnrun "${acct:-main}" >/dev/null 2>&1 </dev/null & fi
+  echo "продолжаю развёртывание ячейки $n в фоне. Ход: vampn spawnstatus"
 }
 
 spawn_status() {
@@ -1919,7 +2037,7 @@ cell_del() { # N --yes [--force]
   local n=${1:-} yes=0 force=0 a tok sid acct us
   shift || true
   for a in "$@"; do case $a in --yes) yes=1 ;; --force) force=1 ;; *) die "лишний параметр $a" ;; esac; done
-  [[ $n =~ ^[0-9]+$ ]] && (( n >= 2 )) || die "vampn cell-del N --yes [--force]  (N от 2: ячейку 1 удалить нельзя)"
+  [[ $n =~ ^[0-9]+$ ]] && (( n >= 2 )) || die "vampn celldel N --yes [--force]  (N от 2: ячейку 1 удалить нельзя)"
   [[ -f $CELLS_DIR/$n.env ]] || die "нет ячейки $n"
   (( yes )) || die "это удалит сервер в Timeweb и ячейку $n. Повторите с --yes"
   us=$(cell_users "$n"); (( us == 0 || force )) || die "в ячейке $n $us пользователей: сначала перенесите их (или --force)"
@@ -1945,13 +2063,14 @@ install_sh() { cat <<'INSTALL_EOF'
 #
 #   install.sh --net 10.77.4 --payload DIR --key-root 'ssh-ed25519 ...' --key-users '...' --key-mirror '...'
 #              [--public-ip IP] [--span 4] [--limit 1000] [--port N] [--home-public-ip IP] [--admin-key '...']... [--no-game] [--name vampn_2]
+#              [--packages-only]                 только поставить пакеты, модуль AmneziaWG и утилиты awg (так работает `vampn init`)
 #              [--render-only --root DIR]        только записать файлы в DIR (для проверки), ничего не ставить и не запускать
 #   В DIR (--payload): vampn (скрипт), amnezia.gpg (ключ PPA), secrets.env (почта через homeserv: MAIL_METHOD=relay ...), необязательно.
 # В конце печатает строки "VAMPN_*=..." (порт, публичный ключ сервера, ключ для почты) - их читает spawn.
 set -euo pipefail
 
 TOOLS_TAG=v3.1.20260812 TOOLS_COMMIT=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843   # amnezia-vpn/amneziawg-tools, как на рабочих серверах
-NET="" SPAN=4 LIMIT=1000 PORT="" PUBLIC_IP="" HOME_PUB_IP="" PAYLOAD="" NAME="" GAME=1 RENDER_ONLY=0 ROOT=""
+NET="" SPAN=4 LIMIT=1000 PORT="" PUBLIC_IP="" HOME_PUB_IP="" PAYLOAD="" NAME="" GAME=1 RENDER_ONLY=0 ROOT="" PACKAGES_ONLY=0
 KEY_ROOT="" KEY_USERS="" KEY_MIRROR="" ADMIN_KEYS=()
 say() { echo "[install] $*" >&2; }
 die() { echo "install.sh: $*" >&2; exit 1; }
@@ -1964,6 +2083,7 @@ while (( $# )); do
     --key-root) KEY_ROOT=$2; shift 2 ;;  --key-users) KEY_USERS=$2; shift 2 ;; --key-mirror) KEY_MIRROR=$2; shift 2 ;;
     --admin-key) ADMIN_KEYS+=("$2"); shift 2 ;;
     --no-game) GAME=0; shift ;;
+    --packages-only) PACKAGES_ONLY=1; shift ;;
     --render-only) RENDER_ONLY=1; shift ;; --root) ROOT=${2%/}; shift 2 ;;
     -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) die "неизвестный параметр $1" ;;
@@ -1971,6 +2091,7 @@ while (( $# )); do
 done
 
 # ---------- проверка входных данных ----------
+if (( PACKAGES_ONLY )); then [[ $EUID == 0 ]] || die "нужен root"; ROOT=""; else
 [[ $NET =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || die "--net: три октета, например 10.77.4"
 [[ $SPAN =~ ^[1-4]$ ]] || die "--span: от 1 до 4 подряд идущих /24"
 [[ $LIMIT =~ ^[0-9]+$ ]] || die "--limit: число"
@@ -1987,6 +2108,7 @@ HOME_TIP=$NET.3 SRV_TIP=$NET.1
 case $SPAN in 1) CIDR=24 ;; 2) CIDR=23 ;; *) CIDR=22; SPAN=4 ;; esac   # три /24 подряд в одну маску не уложить - берём /22 (третий октет сети кратен числу /24)
 (( ${NET##*.} % SPAN == 0 )) || die "--net: третий октет ${NET##*.} не кратен $SPAN (сеть /$CIDR должна начинаться на границе)"
 D=$ROOT/etc/amnezia/amneziawg V=$ROOT/root/vampn
+fi
 
 # ---------- что записать: функции без побочных эффектов, кроме файлов ----------
 rnd() { shuf -i "$1-$2" -n 1; }
@@ -2174,14 +2296,23 @@ EOF
 install_packages() {
   say "пакеты"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get install -y -qq curl jq nftables python3 ca-certificates gnupg git make gcc build-essential dkms perl \
+  # у новых серверов Timeweb сеть бывает с потерями: apt сам повторяет загрузки
+  local -a APT=(apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+  "${APT[@]}" update -qq
+  "${APT[@]}" install -y -qq curl jq nftables python3 ca-certificates gnupg git make gcc build-essential dkms perl \
       "linux-headers-$(uname -r)" openssh-server unattended-upgrades systemd-timesyncd traceroute qrencode >/dev/null
   if [[ -f $PAYLOAD/amnezia.gpg ]]; then install -m 644 "$PAYLOAD/amnezia.gpg" /usr/share/keyrings/amnezia.gpg
-  else [[ -s /usr/share/keyrings/amnezia.gpg ]] || die "нет ключа PPA Amnezia: положите amnezia.gpg в --payload"; fi
+  elif [[ ! -s /usr/share/keyrings/amnezia.gpg ]]; then
+    # на чистом сервере ключа ещё нет (его кладёт spawn): пробуем взять с сервера ключей Ubuntu
+    local g; g=$(mktemp -d); chmod 700 "$g"
+    GNUPGHOME=$g gpg -q --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys 75C9DD72C799870E310542E24166F2C257290828 >/dev/null 2>&1 \
+      && GNUPGHOME=$g gpg -q --batch --export 75C9DD72C799870E310542E24166F2C257290828 > /usr/share/keyrings/amnezia.gpg 2>/dev/null || true
+    rm -rf "$g"
+    [[ -s /usr/share/keyrings/amnezia.gpg ]] || die "нет ключа PPA Amnezia: положите amnezia.gpg в /usr/share/keyrings или в --payload"
+  fi
   echo 'deb [signed-by=/usr/share/keyrings/amnezia.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu noble main' > /etc/apt/sources.list.d/amnezia.list
-  apt-get update -qq
-  apt-get install -y -qq amneziawg-dkms >/dev/null
+  "${APT[@]}" update -qq
+  "${APT[@]}" install -y -qq amneziawg-dkms >/dev/null
   modprobe amneziawg 2>/dev/null || dkms autoinstall >/dev/null 2>&1 || true
   modprobe amneziawg || die "модуль amneziawg не загрузился (dkms status: $(dkms status 2>&1 | head -2 | tr '\n' ' '))"
 }
@@ -2190,7 +2321,10 @@ install_tools() {
   if command -v awg >/dev/null && awg --version 2>&1 | grep -q "${TOOLS_TAG#v}"; then say "утилиты awg уже стоят"; return 0; fi
   say "утилиты awg ($TOOLS_TAG)"
   local src=/usr/local/src/amneziawg-tools
-  [[ -d $src/.git ]] || git clone -q https://github.com/amnezia-vpn/amneziawg-tools "$src"
+  if [[ ! -d $src/.git ]]; then
+    local t; for t in 1 2 3 4 5; do rm -rf "$src"; git clone -q https://github.com/amnezia-vpn/amneziawg-tools "$src" && break; sleep 5; done
+    [[ -d $src/.git ]] || die "не удалось скачать amneziawg-tools с GitHub"
+  fi
   git -C "$src" fetch -q --tags origin 2>/dev/null || true
   git -C "$src" checkout -q "$TOOLS_COMMIT"
   make -C "$src/src" -j2 >/dev/null
@@ -2228,9 +2362,10 @@ if (( RENDER_ONLY )); then
 fi
 install_packages
 install_tools
+if (( PACKAGES_ONLY )); then say "пакеты и утилиты awg готовы"; echo "VAMPN_INIT_OK=1"; exit 0; fi
 write_awg; write_sysctl; write_nft; write_ssh; write_units
 activate
-"/usr/local/sbin/vampn" home-init >/dev/null     # создаёт пира homeserv (адрес $NET.3); его конфиг homeserv заберёт командой `vampn home-conf`
+"/usr/local/sbin/vampn" homeinit >/dev/null     # создаёт пира homeserv (адрес $NET.3); его конфиг homeserv заберёт командой `vampn homeconf`
 verify
 echo "VAMPN_PORT=$(awk -F' *= *' '/^ListenPort/{print $2; exit}' "$D/awg0.conf")"
 echo "VAMPN_SERVER_PUBKEY=$(sed -n 's/^SERVER_PUBKEY=//p' "$V/server.env")"
@@ -2251,10 +2386,11 @@ home_main() {
     cells)      cells_main; return ;;
     account)    shift; account_main "$@"; return ;;
     spawn)      spawn_main "${2:-}"; return ;;
-    _spawn)     spawn_run "${2:?кабинет}"; return ;;
-    spawn-status) spawn_status "${2:-}"; return ;;
-    cell-del)   shift; cell_del "$@"; return ;;
-    install-script) install_sh; return ;;     # установочный бандл для чистого Debian (его же отдаёт spawn)
+    spawnrun)     if [[ -n ${SPAWN_RESUME:-} ]]; then spawn_run "${2:?кабинет}"; else spawn_loop "${2:?кабинет}"; fi; return ;;
+    spawnresume) spawn_resume_main "${2:-}"; return ;;
+    spawnstatus) spawn_status "${2:-}"; return ;;
+    celldel)   shift; cell_del "$@"; return ;;
+    installscript) install_sh; return ;;     # установочный бандл для чистого Debian (его же отдаёт spawn)
   esac
   tw_init
   case $cmd in
@@ -2341,9 +2477,10 @@ case ${1:-} in
   conf)  data_init; valid_name "${2:-}"; render "$2"; cat "$CL/$2.conf"; exit ;;
   qr)    data_init; valid_name "${2:-}"; render "$2"; qrencode -t ansiutf8 < "$CL/$2.conf"; exit ;;
   mailtest) [[ -n ${2:-} ]] || die "vampn mailtest АДРЕС"; mailpy --test "$2"; exit ;;
-  _mail) shift; mailpy "$@"; exit ;;
-  _endpoint-change) data_init; endpoint_change "${2:?IP}"; exit ;;
+  mailsend) shift; mailpy "$@"; exit ;;
+  endpointchange) data_init; endpoint_change "${2:?IP}"; exit ;;
   selfupdate) selfupdate_main; exit ;;
+  init) [[ $EUID == 0 ]] || die "vampn init: нужен root"; install_sh | bash -s -- --packages-only; exit ;;   # на новом сервере: поставить все нужные пакеты
   help|-h|--help) usage 0 ;;
   '') usage 1 ;;
 esac

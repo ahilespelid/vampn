@@ -59,6 +59,21 @@ describe('ApiClient', () => {
     expect(calls[0].init.body).toBe(JSON.stringify({force: true}));
   });
 
+  test('смена IP на выбранном кабинете и переход на кабинет: номер уходит в теле, без номера тело прежнее', async () => {
+    const {api, calls} = client(() => ({body: {text: 'ok'}}));
+    await api.rotate(false, 2);
+    await api.rotate(true, 1);
+    await api.rotate(false);
+    await api.useServer(1);
+    expect(calls.map(c => c.url.replace('https://api.example.com', ''))).toEqual(['/v1/control/rotate', '/v1/control/rotate', '/v1/control/rotate', '/v1/control/use']);
+    expect(calls.map(c => c.init.body)).toEqual([
+      JSON.stringify({force: false, server: 2}),
+      JSON.stringify({force: true, server: 1}),
+      JSON.stringify({force: false}),
+      JSON.stringify({server: 1}),
+    ]);
+  });
+
   test('вход не отправляет токен', async () => {
     const {api, calls} = client(() => ({body: {ok: true}}));
     await api.requestCode('a@example.com');

@@ -1,7 +1,10 @@
 """Интеграционный тест на настоящей MySQL-совместимой базе. Запуск:
 VAMPN_TEST_DB=127.0.0.1:3399:vampn:testpw:vampn_test pytest tests/test_mysql_integration.py
 Без переменной тест пропускается. База должна быть пустой тестовой (таблицы очищаются!)."""
+import importlib.util
 import os
+import time
+from datetime import datetime, timezone
 
 import pymysql
 import pytest
@@ -23,7 +26,8 @@ def db():
     conn = pymysql.connect(host=host, port=int(port), user=user, password=pw, database=name, autocommit=True)
     cur = conn.cursor()
     cur.execute("SET FOREIGN_KEY_CHECKS=0")
-    for t in ("user_events", "notifications", "`keys`", "sessions", "devices", "login_codes", "login_attempts", "metrics", "users"):
+    for t in ("user_events", "notifications", "`keys`", "sessions", "devices", "login_codes", "login_attempts", "metrics",
+              "key_stats", "key_traffic", "key_events", "users"):
         cur.execute("TRUNCATE TABLE " + t)
     cur.execute("SET FOREIGN_KEY_CHECKS=1")
     for n, e, r in (("ahilespelid", "boss@example.com", "admin"), ("griga", "griga@example.com", "user"),
@@ -91,6 +95,58 @@ def test_admin_flow_and_soft_revoke_on_real_database(db):
     assert c.post("/v1/admin/users", headers=hb, json={"name": "griga", "email": "griga@example.com"}).status_code == 200
     events = [e["event"] for e in c.get("/v1/admin/events?name=griga", headers=hb).json()["events"]]
     assert events == ["restored", "revoked"]
+
+
+def load_collector():
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "metrics", "vampn-metrics.py")
+    spec = importlib.util.spec_from_file_location("vampn_metrics", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_key_stats_written_by_collector_are_read_by_api(db):
+    """Настоящий SQL сборщика (upsert, часовые корзины, события, пояс UTC) и чтение его же данных ручками API."""
+    c, cur, login, *_ = db
+    m = load_collector()
+    now = int(time.time())
+    srv = ("основной", "198.51.100.7")
+
+    def rows(*r):
+        return m.parse_peers("".join("\t".join(str(v) for v in srv + x) + "\n" for x in r))[1]
+
+    def run(state, server, rs, ts, cleanup=False):
+        state, ch = m.diff_peers(state, server, rs, ts)
+        for line in m.build_peers_sql(ch, cleanup).splitlines():
+            cur.execute(line)
+        return state
+
+    st = run({}, srv, rows(("griga", "203.0.113.5", now - 3000, 1000, 2000), ("mio", "-", 0, 0, 0)), now - 3010)
+    st = run(st, srv, rows(("griga", "203.0.113.5", now - 2940, 1500, 5000), ("mio", "-", 0, 0, 0)), now - 2950)
+    # через 49 минут новое рукопожатие с другого IP клиента, сервер сменил адрес; заодно проверяем запросы очистки
+    run(st, ("основной", "203.0.113.77"), rows(("griga", "198.51.100.50", now - 5, 1600, 5100), ("mio", "-", 0, 0, 0)), now,
+        cleanup=True)
+
+    hb, _ = login("boss@example.com")
+    allk = {k["name"]: k for k in c.get("/v1/stats/keys", headers=hb).json()["keys"]}
+    g = allk["griga"]
+    assert (g["up_total"], g["down_total"], g["connections"]) == (600, 3100, 1)
+    assert (g["up_24h"], g["down_24h"]) == (600, 3100) and g["online"] is True
+    assert (g["last_client_ip"], g["last_server"], g["last_server_ip"]) == ("198.51.100.50", "основной", "203.0.113.77")
+    assert allk["mio"]["connections"] == 0 and allk["mio"]["up_total"] == 0 and allk["mio"]["online"] is False
+    utc = lambda ts: datetime.fromtimestamp(ts, timezone.utc).replace(tzinfo=None)  # noqa: E731
+    assert datetime.strptime(g["last_seen_at"], "%Y-%m-%dT%H:%M:%SZ") == utc(now - 5)
+    assert datetime.strptime(g["first_seen_at"], "%Y-%m-%dT%H:%M:%SZ") == utc(now - 3000)
+
+    hg, _ = login("griga@example.com")
+    assert [k["name"] for k in c.get("/v1/stats/keys", headers=hg).json()["keys"]] == ["griga"]
+    assert c.get("/v1/stats/keys/mio", headers=hg).status_code == 404
+    d = c.get("/v1/stats/keys/griga", headers=hg).json()
+    assert sorted(e["kind"] for e in d["events"]) == ["client_ip", "connect", "server_ip"]
+    assert d["client_ips"] == [{"ip": "198.51.100.50", "connects": 1, "last_at": d["client_ips"][0]["last_at"]}]
+    assert len(d["days"]) == 1 and (d["days"][0]["up"], d["days"][0]["down"]) == (600, 3100)
+    server_ip = [e for e in d["events"] if e["kind"] == "server_ip"][0]
+    assert server_ip["key"] is None and (server_ip["old"], server_ip["new"]) == ("198.51.100.7", "203.0.113.77")
 
 
 def test_lockout_persists_in_database(db):

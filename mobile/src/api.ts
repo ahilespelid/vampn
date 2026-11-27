@@ -59,7 +59,86 @@ export type UserEvent = {
   created_at: string;
 };
 
+/** Ячейка = отдельный VPN-сервер (до ~1000 клиентов). state - слово от vampn: «активна», «создаётся», «ошибка». */
+export type Cell = {
+  cell: number;
+  name: string;
+  ip: string | null;
+  users: number;
+  limit: number;
+  handshake: string | null;
+  state: string;
+};
+
+/** Кабинет Timeweb. Токен в приложение не возвращается никогда. */
+export type TimewebAccount = {
+  name: string;
+  status: 'ok' | 'denied' | 'none' | string;
+  balance: number | null;
+  currency: string | null;
+  default: boolean;
+  message: string | null;
+};
+
+export type SpawnState = 'queued' | 'running' | 'done' | 'failed' | 'none';
+export type SpawnStatus = {state: SpawnState; detail: string; log: string[]};
+
 export type StatPoint = {ts: string; value: number};
+
+/**
+ * Статистика одного ключа. «down» - скачано (отправлено клиенту), «up» - отдано (принято от клиента), байты.
+ * Учёт идёт с первого запуска сборщика на сервере: что было раньше, неизвестно.
+ */
+export type KeyStats = {
+  name: string;
+  role: Role | null;
+  /** null: такого пользователя в базе нет, ключ известен только по статистике. */
+  active: boolean | null;
+  added_at: string | null;
+  removed_at: string | null;
+  removed_reason: string | null;
+  tracked_since: string | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  online: boolean;
+  connections: number;
+  up_total: number;
+  down_total: number;
+  up_24h: number;
+  down_24h: number;
+  up_7d: number;
+  down_7d: number;
+  up_30d: number;
+  down_30d: number;
+  last_client_ip: string | null;
+  last_server: string | null;
+  last_server_ip: string | null;
+};
+
+export type KeyStatsTotals = Pick<
+  KeyStats,
+  'connections' | 'up_total' | 'down_total' | 'up_24h' | 'down_24h' | 'up_7d' | 'down_7d' | 'up_30d' | 'down_30d'
+> & {keys: number; online: number};
+
+export type KeyStatsList = {generated_at: string; keys: KeyStats[]; totals: KeyStatsTotals};
+
+/** connect - подключение, client_ip - сменился IP клиента, server_ip - сменился IP сервера, server_switch - переключили сервер. */
+export type KeyEvent = {
+  at: string;
+  kind: 'connect' | 'client_ip' | 'server_ip' | 'server_switch' | string;
+  /** null: событие всего сервера, касается всех ключей. */
+  key: string | null;
+  old: string | null;
+  new: string | null;
+  server: string | null;
+  server_ip: string | null;
+};
+
+export type KeyDay = {day: string; up: number; down: number};
+export type KeyClientIp = {ip: string; connects: number; last_at: string | null};
+export type KeyIssue = {at: string; reason: 'created' | 'reissued' | 'resent' | string};
+
+export type KeyStatsDetail = KeyStats & {days: KeyDay[]; client_ips: KeyClientIp[]; events: KeyEvent[]; issued: KeyIssue[]};
 
 export class ApiError extends Error {
   status: number;
@@ -296,11 +375,21 @@ export class ApiClient {
     return this.request<{text: string}>('GET', '/v1/server', {command: 'vampn server'});
   }
 
-  rotate(force: boolean) {
+  /** server: кабинет Timeweb (1 основной, 2 запасной), только суперадмин; без него меняется IP на активном. */
+  rotate(force: boolean, server?: 1 | 2) {
     return this.request<{text: string}>('POST', '/v1/control/rotate', {
-      body: {force},
+      body: server ? {force, server} : {force},
       timeoutMs: CONTROL_TIMEOUT_MS,
-      command: `vampn rotate${force ? ' --force' : ''}`,
+      command: `vampn rotate${force ? ' --force' : ''}${server ? ` ${server}` : ''}`,
+    });
+  }
+
+  /** Перевести туннель на кабинет Timeweb (1 основной, 2 запасной), IP не меняется, ключи не рассылаются. Только суперадмин. */
+  useServer(server: 1 | 2) {
+    return this.request<{text: string}>('POST', '/v1/control/use', {
+      body: {server},
+      timeoutMs: CONTROL_TIMEOUT_MS,
+      command: `vampn use ${server}`,
     });
   }
 
@@ -325,6 +414,15 @@ export class ApiClient {
       'GET',
       `/v1/stats?metric=${encodeURIComponent(metric)}&hours=${hours}`,
     );
+  }
+
+  /** Статистика по ключам: свои, у суперадмина все (и удалённые). */
+  keyStats() {
+    return this.request<KeyStatsList>('GET', '/v1/stats/keys');
+  }
+
+  keyStatsDetail(name: string) {
+    return this.request<KeyStatsDetail>('GET', `/v1/stats/keys/${encodeURIComponent(name)}`);
   }
 
   keys(all = false) {
@@ -398,5 +496,49 @@ export class ApiClient {
 
   patchUser(name: string, patch: {email?: string; role?: Role; active?: boolean}) {
     return this.request<{ok: boolean}>('PATCH', `/v1/admin/users/${encodeURIComponent(name)}`, {body: patch});
+  }
+
+  // ---- суперадмин: ячейки (серверы) и аренда новых серверов в Timeweb ----
+
+  adminCells() {
+    return this.request<{cells: Cell[]}>('GET', '/v1/admin/cells', {timeoutMs: 30000});
+  }
+
+  adminAccounts() {
+    return this.request<{accounts: TimewebAccount[]}>('GET', '/v1/admin/timeweb/accounts', {timeoutMs: 100000});
+  }
+
+  /** Токен уходит только в тело этого запроса: без `command`, поэтому в журнал на экране не попадает. */
+  adminAddAccount(name: string, token: string) {
+    return this.request<{ok: boolean; text: string}>('POST', '/v1/admin/timeweb/accounts', {body: {name, token}, timeoutMs: 60000});
+  }
+
+  adminDefaultAccount(name: string) {
+    return this.request<{ok: boolean; text: string}>('POST', `/v1/admin/timeweb/accounts/${encodeURIComponent(name)}/default`);
+  }
+
+  adminDeleteAccount(name: string) {
+    return this.request<{ok: boolean; text: string}>('DELETE', `/v1/admin/timeweb/accounts/${encodeURIComponent(name)}`);
+  }
+
+  /** Арендует платный сервер (Амстердам, самый дешёвый тариф, Debian) и разворачивает ячейку. Возвращается сразу: идёт в фоне. */
+  adminSpawn(account?: string) {
+    return this.request<{ok: boolean; text: string}>('POST', '/v1/admin/spawn', {
+      body: account ? {account} : {},
+      timeoutMs: 60000,
+      command: 'vampn spawn',
+    });
+  }
+
+  adminSpawnStatus() {
+    return this.request<SpawnStatus>('GET', '/v1/admin/spawn', {timeoutMs: 30000});
+  }
+
+  adminDeleteCell(n: number) {
+    return this.request<{ok: boolean; text: string}>('POST', `/v1/admin/cells/${n}/delete`, {
+      body: {confirm: true},
+      timeoutMs: 90000,
+      command: `vampn cell-del ${n}`,
+    });
   }
 }
