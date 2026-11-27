@@ -8,20 +8,21 @@
 #   vampn status           состояние сторожа: туннель, Timeweb, смены IP, журнал
 #   vampn server           состояние самого VPN-сервера
 #   vampn snapshot         настройки VPN-сервера без ключей (только чтение; по ним собран install.sh)
-#   vampn list             пользователи VPN и их последнее подключение
+#   vampn list             пользователи ВСЕХ ячеек: имя, ячейка, IP, почта, последнее подключение (одной ячейки: VAMPN_CELL=N vampn list)
 #   vampn peers            только чтение: по каждому ключу сервер, IP клиента, рукопожатие, принято и отправлено байт (для статистики в приложении)
-#   vampn reissue ИМЯ      перевыпустить ключ (старый перестаёт работать), новый уйдёт на почту
-#   vampn resend ИМЯ       отправить текущий ключ на почту ещё раз
-#   vampn resendall       отправить текущий ключ ВСЕМ из users.conf заново (с повтором неушедших и тревогой в Telegram)
-#   vampn mailstatus       кому и когда ушёл ключ, у кого отправка не удалась
-#   vampn keyconf ИМЯ      показать .conf ключа (из него приложение строит QR)
-#   vampn link ИМЯ         показать строку vpn:// пользователя
-#   vampn users            применить /etc/vampn/users.conf сейчас (сам применяется в течение минуты)
+#   vampn reissue ИМЯ      перевыпустить ключ (старый перестаёт работать), новый уйдёт на почту; пользователь из любой ячейки
+#   vampn resend ИМЯ       отправить текущий ключ на почту ещё раз (из любой ячейки)
+#   vampn resendall       отправить текущий ключ ВСЕМ из users.conf (всех ячеек) заново (с повтором неушедших и тревогой в Telegram)
+#   vampn mailstatus       кому и когда ушёл ключ (по всем ячейкам), у кого отправка не удалась
+#   vampn mailkey N        прописать на homeserv ключ почты сервера ячейки N (лечит «relay failed ... Permission denied» у resend)
+#   vampn keyconf ИМЯ      показать .conf ключа (из него приложение строит QR); пользователь из любой ячейки
+#   vampn link ИМЯ         показать строку vpn:// пользователя (из любой ячейки)
+#   vampn users            применить /etc/vampn/users.conf сейчас во всех ячейках (сам применяется в течение минуты)
 #   vampn rotate [--force] [1|2] сменить IP сервера сейчас, на активном или на указанном (1 основной, 2 запасной); --force - без резерва и пауз по лимиту
 #   vampn use 1|2          сделать активным основной (1) или запасной (2) сервер Timeweb и направить туннель на него
 #   vampn reboot [hard]    перезагрузить VPN-сервер через API Timeweb
 #   vampn sync             подтянуть текущий IP из Timeweb в туннель
-#   vampn mirror           скопировать данные пользователей с VPN-сервера сейчас
+#   vampn mirror           скопировать данные пользователей со всех VPN-серверов сейчас
 #   vampn deploy           отправить этот скрипт на Бостон и активный VPN-сервер заново (сам отправляется, когда скрипт изменился)
 #   vampn cells            ячейки: номер, имя, IP, пользователей/лимит, рукопожатие, состояние (таблица через табуляцию)
 #   vampn account add ИМЯ  добавить кабинет Timeweb (токен на stdin); account list|default|del
@@ -1663,18 +1664,24 @@ key_local() {     # link|conf ИМЯ - из копии данных на homeser
   esac
 }
 
-mailstatus() {    # vampn mailstatus: по каждому из users.conf - последняя отправка ключа
-  local n em last ts st det bad=0 line
-  USERS_CONF=$(users_conf_file) || die "нет /etc/vampn/users.conf"
-  printf '%-14s %-34s %-12s %s\n' ИМЯ ПОЧТА ПОСЛЕДНЯЯ ИТОГ
-  while read -r n em _; do
-    [[ -z $n || $n == \#* ]] && continue
-    last=$(awk -F'\t' -v n="$n" '$4=="key" && $2==n {l=$0} END{print l}' "$MAILLOG" 2>/dev/null)
-    if [[ -z $last ]]; then printf '%-14s %-34s %-12s %s\n' "$n" "$em" - "нет записи (письмо ушло до журнала)"; continue; fi
+cell_state() { # номер -> каталог состояния ячейки (журнал отправки писем и т.п.)
+  if (( $1 == CELL )); then echo "$STATE"
+  elif (( $1 == 1 )); then echo /var/lib/vampn
+  else echo "${VAMPN_CELLS_STATE:-/var/lib/vampn/cells}/$1"; fi
+}
+
+mailstatus() {    # vampn mailstatus: по каждому из users.conf (всех ячеек) - последняя отправка ключа
+  local n em c last ts st det bad=0 line src=${VAMPN_USERS:-/etc/vampn/users.conf}
+  [[ -f $src ]] || die "нет /etc/vampn/users.conf"
+  printf '%-14s %-7s %-34s %-12s %s\n' ИМЯ ЯЧЕЙКА ПОЧТА ПОСЛЕДНЯЯ ИТОГ
+  while read -r n em c; do
+    [[ -z $n ]] && continue
+    last=$(awk -F'\t' -v n="$n" '$4=="key" && $2==n {l=$0} END{print l}' "$(cell_state "$c")/mail-status.tsv" 2>/dev/null)
+    if [[ -z $last ]]; then printf '%-14s %-7s %-34s %-12s %s\n' "$n" "$c" "$em" - "нет записи (письмо ушло до журнала)"; continue; fi
     IFS=$'\t' read -r ts _ _ _ st det <<<"$last"
     if [[ $st == ok ]]; then line="принято почтовым сервером"; else line="НЕ УШЛО: $det"; bad=$(( bad + 1 )); fi
-    printf '%-14s %-34s %-12s %s\n' "$n" "$em" "$(date -d "@$ts" '+%d.%m %H:%M')" "$line"
-  done < "$USERS_CONF"
+    printf '%-14s %-7s %-34s %-12s %s\n' "$n" "$c" "$em" "$(date -d "@$ts" '+%d.%m %H:%M')" "$line"
+  done < <(sed 's/\r$//' "$src" | awk '/^[[:space:]]*#/ || NF < 2 {next} {print $1, $2, (NF >= 3 && $3 ~ /^[0-9]+$/) ? $3 + 0 : 1}')
   echo
   echo "«принято» - почтовый сервер взял письмо; дойдёт ли оно до ящика (не спам ли), он не сообщает."
   echo "Ключ всегда можно получить и в приложении vampn по логину. Отправить всем заново: vampn resendall"
@@ -1988,8 +1995,7 @@ spawn_run() { # КАБИНЕТ - сама аренда и развёртыван
   sp_log "установлено: порт $port"
 
   sp_step "ключ почты сервера на homeserv и конфиг туннеля"
-  grep -q " vampn-mailrelay-$n\$" ${HOME_AK:-/root/.ssh/authorized_keys} 2>/dev/null || \
-    echo "restrict,from=\"$net.1\",command=\"/usr/local/sbin/vampn mail\" $relay_pub vampn-mailrelay-$n" >> ${HOME_AK:-/root/.ssh/authorized_keys}
+  relay_authorize "$n" "$net" "$relay_pub" || sp_fail "сервер вернул непонятный ключ почты"
   ( umask 077; "${ssh[@]}" "root@$ip" "/usr/local/sbin/vampn homeconf" </dev/null \
       | awk -v srv="$net.1" -v ep="$ip:$port" '/^DNS *=/{next} /^AllowedIPs *=/{print "AllowedIPs = " srv "/32"; next} /^Endpoint *=/{print "Endpoint = " ep; next} {print}' \
       > "$AWG_DIR/vampn$n.conf" )
@@ -2552,14 +2558,135 @@ INSTALL_EOF
 }
 # <<< install.sh
 
+relay_authorize() { # N СЕТЬ КЛЮЧ - разрешить почтовому ключу сервера ячейки N передавать письма через homeserv (прежняя строка ячейки заменяется)
+  local n=$1 net=$2 pub=$3 ak=${HOME_AK:-/root/.ssh/authorized_keys} tmp
+  [[ $pub =~ ^ssh-[a-z0-9-]+\ [A-Za-z0-9+/=]+ ]] || return 1
+  pub=$(awk '{print $1, $2}' <<<"$pub")
+  install -d -m 700 "$(dirname "$ak")"; touch "$ak"; tmp=$(mktemp)
+  # прежнюю строку убираем только её саму (если она когда-то слиплась с соседней без перевода строки, соседняя остаётся)
+  sed -E "s/restrict,from=\"[^\"]*\",command=\"[^\"]*\" ssh-[a-z0-9-]+ [A-Za-z0-9+\/=]+ vampn-mailrelay-$n\$//" "$ak" | awk 'NF' > "$tmp"
+  echo "restrict,from=\"$net.1\",command=\"/usr/local/sbin/vampn mail\" $pub vampn-mailrelay-$n" >> "$tmp"
+  cat "$tmp" > "$ak"; rm -f "$tmp"; chmod 600 "$ak"
+}
+
+mailkey_main() { # vampn mailkey N - прописать на homeserv ключ почты сервера ячейки N (лечит «relay failed ... Permission denied» при vampn resend/reissue)
+  local n=${1:-} net ip pub="" h kh chk
+  [[ $n =~ ^[0-9]+$ ]] && (( n >= 2 )) && [[ -f $CELLS_DIR/$n.env ]] || die "vampn mailkey N (N - номер ячейки 2 и выше, см. vampn cells)"
+  net=$(cell_field "$n" CELL_NET); ip=$(cell_field "$n" CELL_IP); kh=$CELLS_DIR/$n.known_hosts_public
+  for h in "$net.1" "$ip"; do
+    [[ -n $h ]] || continue
+    pub=$(ssh -T -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=2 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+          -o UserKnownHostsFile="$kh" -i "$ETC_DIR/spawn.key" "root@$h" 'cat /root/.ssh/mailrelay.pub' </dev/null 2>/dev/null) && [[ -n $pub ]] && break
+    pub=""
+  done
+  [[ -n $pub ]] || die "не достучался до сервера ячейки $n (ни по туннелю $net.1, ни по $ip)"
+  relay_authorize "$n" "$net" "$pub" || die "на сервере ячейки $n непонятный ключ почты"
+  echo "ключ почты сервера ячейки $n прописан в ${HOME_AK:-/root/.ssh/authorized_keys}"
+  chk=$(ssh -T -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=10 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+        -o UserKnownHostsFile="$kh" -i "$ETC_DIR/spawn.key" "root@$h" \
+        "ssh -i /root/.ssh/mailrelay -p 777 -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/root/.ssh/mailrelay.known_hosts root@$net.3 true </dev/null 2>&1" </dev/null 2>&1) || true
+  if grep -q 'Permission denied' <<<"$chk"; then echo "ВНИМАНИЕ: сервер всё равно не пускают: $(tail -c 200 <<<"$chk" | tr '\n' ' ')"; return 1; fi
+  echo "проверка с сервера: вход на homeserv есть, письма пойдут через него"
+}
+
+# ---------- все ячейки сразу: с homeserv команды работают для пользователя любой ячейки ----------
+cell_of_user() { # ИМЯ -> номер ячейки из users.conf (пусто, если пользователя там нет, например завели на самом сервере)
+  sed 's/\r$//' "${VAMPN_USERS:-/etc/vampn/users.conf}" 2>/dev/null | awk -v n="$1" '
+    /^[[:space:]]*#/ || NF == 0 { next }
+    $1 == n { print (NF >= 3 && $3 ~ /^[0-9]+$/) ? $3 + 0 : 1; exit }'
+}
+cells_active() { # номера ячеек, готовых к работе: первая всегда, остальные - в состоянии «активна»
+  local c; for c in $(cell_ids); do
+    [[ $c == 1 || $(cell_field "$c" CELL_STATE) == активна ]] && echo "$c"
+  done
+}
+
+list_all() { # vampn list на homeserv: пользователи ВСЕХ ячеек с пометкой ячейки
+  local c t rc conf st total=0 bad="" fmt='%-20s %-7s %-15s %-30s %s\n'
+  t=$(mktemp -d)
+  for c in $(cells_active); do
+    ( VAMPN_CELL=$c timeout "${LIST_TIMEOUT:-60}" "$SELF" list >"$t/$c.out" 2>"$t/$c.err" </dev/null; echo $? > "$t/$c.rc" ) &
+  done
+  wait
+  printf "$fmt" ИМЯ ЯЧЕЙКА IP ПОЧТА "ПОСЛЕДНЕЕ ПОДКЛЮЧЕНИЕ"
+  for c in $(cell_ids); do
+    conf=$(sed 's/\r$//' "${VAMPN_USERS:-/etc/vampn/users.conf}" 2>/dev/null | awk -v c="$c" '
+      /^[[:space:]]*#/ || NF < 2 { next }
+      { cc = (NF >= 3 && $3 ~ /^[0-9]+$/) ? $3 + 0 : 1; if (cc == c) print $1, $2 }')
+    rc=$(cat "$t/$c.rc" 2>/dev/null || echo skip)
+    if [[ $rc == 0 ]]; then
+      CONF="$conf" awk -v c="$c" -v fmt="$fmt" '
+        BEGIN { m = split(ENVIRON["CONF"], L, "\n"); for (i = 1; i <= m; i++) { split(L[i], f, " "); if (f[1] != "") cm[f[1]] = f[2] } }
+        NR > 1 && $1 != "" && $1 != "homeserv" {
+          last = $4; for (i = 5; i <= NF; i++) last = last " " $i
+          printf fmt, $1, c, $2, $3, last; seen[$1] = 1; n++
+        }
+        END { for (u in cm) if (!(u in seen)) { printf fmt, u, c, "-", cm[u], "ещё не создан на сервере"; n++ } ; print n + 0 > "/dev/stderr" }' "$t/$c.out" 2>"$t/$c.n"
+      total=$(( total + $(tail -1 "$t/$c.n" 2>/dev/null || echo 0) ))
+    else
+      if [[ $rc == skip ]]; then st="ячейка не активна ($(cell_field "$c" CELL_STATE))"; else st="ячейка не отвечает"; fi
+      [[ $rc == skip ]] || bad="$bad $c"
+      while read -r u e; do
+        [[ -n $u ]] || continue
+        printf "$fmt" "$u" "$c" - "$e" "$st"; total=$(( total + 1 ))
+      done <<<"$conf"
+    fi
+  done
+  echo
+  echo "Всего пользователей: $total, ячеек: $(cell_ids | wc -l)."
+  [[ -z $bad ]] || echo "Не ответили (показаны по users.conf): ячейки${bad}. Подробности: VAMPN_CELL=N vampn list"
+  echo "Команды reissue / resend / link / keyconf ИМЯ сами находят ячейку пользователя."
+  rm -rf "$t"
+}
+
+user_route() { # reissue|resend|link|keyconf ИМЯ - выполнить в ячейке пользователя (сначала в той, что указана в users.conf, потом в остальных)
+  local cmd=$1 n=${2:-} first c out rc ef err bad="" multi
+  [[ $n =~ ^[a-zA-Z0-9_.-]{1,32}$ ]] || die "нужно имя пользователя: vampn $cmd ИМЯ"
+  first=$(cell_of_user "$n")
+  local -a order=(); [[ -n $first ]] && order+=("$first")
+  for c in $(cells_active); do [[ $c == "$first" ]] || order+=("$c"); done
+  multi=$(cell_ids | wc -l); ef=$(mktemp)
+  for c in "${order[@]}"; do
+    out=$(VAMPN_CELL=$c "$SELF" "$cmd" "$n" 2>"$ef"); rc=$?; err=$(cat "$ef")
+    if (( rc == 0 )); then
+      rm -f "$ef"; (( multi > 1 )) && echo "[ячейка $c]" >&2
+      [[ -n $err ]] && echo "$err" >&2; [[ -n $out ]] && printf '%s\n' "$out"; return 0
+    fi
+    grep -qE 'нет пользователя|нет актуальной копии' <<<"$err$out" && continue     # его в этой ячейке нет - смотрим следующую
+    if [[ $c == "$first" ]]; then
+      rm -f "$ef"; [[ -n $out ]] && printf '%s\n' "$out"; echo "$err" >&2; die "ячейка $c (там пользователь $n): команда не выполнена"
+    fi
+    bad="$bad $c"
+  done
+  rm -f "$ef"
+  [[ -z $bad ]] || die "пользователя $n нет в ответивших ячейках; не ответили:$bad"
+  die "нет пользователя $n ни в одной ячейке (vampn list)"
+}
+
+all_cells() { # КОМАНДА [skipempty] - выполнить по очереди для каждой готовой ячейки
+  local cmd=$1 c rc=0 n=0
+  for c in $(cells_active); do
+    [[ ${2:-} == skipempty ]] && (( $(cell_users "$c") == 0 )) && continue
+    n=$(( n + 1 )); echo "== ячейка $c ($(cell_field "$c" CELL_NAME)) =="
+    VAMPN_CELL=$c "$SELF" "$cmd" </dev/null || rc=1
+  done
+  (( n )) || echo "нет ячеек с пользователями"
+  return $rc
+}
+
 home_main() {
   local cmd=${1:-}
   case $cmd in
     mail)       mailpy --relay; return ;;            # письма от VPN-сервера (принудительная команда ключа)
     alert)      mailpy --alert "${2:-vampn}"; return ;;
-    resendall) resend_all; return ;;
+    resendall) if [[ -z ${VAMPN_CELL:-} ]]; then all_cells resendall skipempty; else resend_all; fi; return ;;
     mailstatus) mailstatus; return ;;
-    keyconf)    key_local conf "${2:-}" || die "нет актуальной копии ключа ${2:-} (vampn mirror)"; return ;;
+    mailkey)    mailkey_main "${2:-}"; return ;;
+    keyconf)    if [[ -z ${VAMPN_CELL:-} ]]; then user_route keyconf "${2:-}"
+                else key_local conf "${2:-}" || die "нет актуальной копии ключа ${2:-} (vampn mirror)"; fi; return ;;
+    list)       if [[ -z ${VAMPN_CELL:-} ]]; then list_all; return; fi ;;
+    reissue|resend|link) if [[ -z ${VAMPN_CELL:-} ]]; then user_route "$cmd" "${2:-}"; return; fi ;;
+    users|mirror) if [[ -z ${VAMPN_CELL:-} ]]; then all_cells "$cmd"; return; fi ;;
     cells)      cells_main; return ;;
     account)    shift; account_main "$@"; return ;;
     spawn)      spawn_main "${2:-}"; return ;;

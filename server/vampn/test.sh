@@ -924,6 +924,7 @@ ssh() { local a="$*"; echo "ssh ${a: -60}" >> "$S/ssh.log"
   case $a in
     *install.sh*) cat > "$S/payload.tar"; [[ ${INSTALL_FAIL:-} == 1 ]] && { echo "E: boom"; return 1; }
        echo "[install] x"; echo VAMPN_PORT=41234; echo VAMPN_SERVER_PUBKEY=SRVPUB=; echo "VAMPN_MAILRELAY_PUB=ssh-ed25519 AAAARELAY"; [[ ${INSTALL_NOOK:-} == 1 ]] || echo VAMPN_INSTALL_OK=1 ;;
+    *mailrelay.pub*) echo "ssh-ed25519 AAAAFIXED vampn-mailrelay" ;;
     *server.env*) printf 'SUBNET=10.77.12\nCLIENT_LIMIT=1000\nPORT=41234\n' ;;
     *" hostname") echo vampn-ams ;;
     *" true") [[ ${SSH_DENY:-} == 1 ]] && return 255; return 0 ;;
@@ -1092,6 +1093,75 @@ ok "adopt: сервера с таким адресом нет в Timeweb - от�
 SSH_DENY=1; a_out=$(adopt_main 203.0.113.9 2>&1); a_rc=$?; unset SSH_DENY
 ok "adopt: нет доступа по ключу homeserv - печатает строку для authorized_keys и не стартует" '[[ $a_rc != 0 && $a_out == *"authorized_keys"* && $a_out == *"AAAAFAKE homeserv"* ]]'
 ok "adopt: плохой IP и лишние параметры отклоняются" '! (adopt_main abc) >/dev/null 2>&1 && ! (adopt_main 1.2.3.4 --bogus) >/dev/null 2>&1'
+
+# -- ключ почты сервера ячейки на homeserv (relay failed ... Permission denied)
+printf 'ssh-ed25519 AAAAADMIN vampn-admin' > "$HOME_AK"      # последняя строка без перевода строки
+relay_authorize 2 10.77.4 "ssh-ed25519 AAAAONE comment"
+relay_authorize 2 10.77.4 "ssh-ed25519 AAAATWO other"
+ok "relay_authorize: чужая строка без перевода строки не слиплась, ключ ячейки один и последний, from=сервер ячейки" '[[ $(wc -l < $HOME_AK) == 2 ]] && grep -qx "ssh-ed25519 AAAAADMIN vampn-admin" $HOME_AK && [[ $(grep -c "vampn-mailrelay-2$" $HOME_AK) == 1 ]] && grep -qx "restrict,from=\"10.77.4.1\",command=\"/usr/local/sbin/vampn mail\" ssh-ed25519 AAAATWO vampn-mailrelay-2" $HOME_AK'
+ok "relay_authorize: мусор вместо ключа отклоняется, файл не меняется" 'cp $HOME_AK $T/ak.keep; ! relay_authorize 2 10.77.4 "garbage" && cmp -s $HOME_AK $T/ak.keep'
+printf 'CELL_NAME=vampn_2\nCELL_NET=10.77.4\nCELL_LIMIT=1000\nCELL_IP=203.0.113.9\nCELL_STATE=активна\n' > "$CELLS_DIR/2.env"; : > "$S/ssh.log"
+mk_out=$(mailkey_main 2 2>&1); mk_rc=$?
+ok "mailkey: ключ почты берётся с сервера и прописывается на homeserv, проверка входа выполнена" '[[ $mk_rc == 0 && $mk_out == *"прописан"* && $mk_out == *"письма пойдут"* ]] && grep -q "AAAAFIXED vampn-mailrelay-2$" $HOME_AK && ! grep -q AAAATWO $HOME_AK && grep -q "mailrelay" $S/ssh.log'
+ok "mailkey: нет такой ячейки или плохой номер - отказ" '! (mailkey_main 9) >/dev/null 2>&1 && ! (mailkey_main 1) >/dev/null 2>&1 && ! (mailkey_main) >/dev/null 2>&1'
+rm -f "$CELLS_DIR/2.env"; : > "$HOME_AK"
+
+# -- homeserv видит пользователей ВСЕХ ячеек и выполняет команды для пользователя любой ячейки
+for c in 2 3; do printf 'CELL_NAME=vampn_%s\nCELL_NET=10.77.%s\nCELL_LIMIT=1000\nCELL_STATE=активна\n' "$c" $((4*(c-1))) > "$CELLS_DIR/$c.env"; done
+printf 'CELL_NAME=vampn_4\nCELL_NET=10.77.12\nCELL_LIMIT=1000\nCELL_STATE=создаётся\n' > "$CELLS_DIR/4.env"
+printf '# все\na a@x.ru\nf f@x.ru 2\nz z@x.ru 2\nd d@x.ru 3\ng g@x.ru 4\n' > "$S/users.conf"; MC=$T/mc; rm -rf "$MC"; mkdir -p "$MC"
+cat > "$MC/fakeself" <<'MCEOF'
+#!/bin/bash
+cell=${VAMPN_CELL:-1}
+echo "cell=$cell $*" >> @CALLS@
+case $1 in
+  list) case $cell in
+    1) echo "ИМЯ IP ПОЧТА ПОСЛЕДНЕЕ ПОДКЛЮЧЕНИЕ"; echo "a 10.77.0.2 a@x.ru 2026-11-27 10:00:00"; echo "homeserv 10.77.0.3 - никогда" ;;
+    2) echo "ИМЯ IP ПОЧТА ПОСЛЕДНЕЕ ПОДКЛЮЧЕНИЕ"; echo "f 10.77.4.2 f@x.ru никогда"; echo "client1 10.77.4.5 - 2026-11-27 11:11:11" ;;
+    *) echo "туннель молчит" >&2; exit 1 ;;
+  esac ;;
+  reissue|resend|link|keyconf)
+    n=$2
+    case "$cell:$n" in
+      2:f|2:client1|1:a) echo "готово $1 $n" ;;
+      3:d) echo "FAIL d relay failed: Permission denied" >&2; exit 1 ;;
+      *) echo "vampn: нет пользователя $n" >&2; exit 1 ;;
+    esac ;;
+  users|mirror|resendall) echo "готово $1" ;;
+esac
+MCEOF
+sed -i "s|@CALLS@|$MC/calls|" "$MC/fakeself"; chmod +x "$MC/fakeself"; : > "$MC/calls"
+l_out=$(SELF=$MC/fakeself list_all 2>&1)
+ok "list: пользователи всех ответивших ячеек с номером ячейки, служебный homeserv не показан" '[[ $l_out == *"ЯЧЕЙКА"* && $l_out =~ a[[:space:]]+1[[:space:]]+10.77.0.2 && $l_out =~ f[[:space:]]+2[[:space:]]+10.77.4.2 && $l_out =~ client1[[:space:]]+2[[:space:]]+10.77.4.5 && $l_out != *homeserv* && $l_out == *"2026-11-27 10:00:00"* ]]'
+ok "list: пользователь из users.conf, которого нет на сервере, помечен; не ответившая и неактивная ячейки показаны по users.conf" '[[ $l_out =~ z[[:space:]]+2[[:space:]]+-[[:space:]]+z@x.ru[[:space:]]+ещё\ не\ создан && $l_out =~ d[[:space:]]+3[[:space:]]+-[[:space:]]+d@x.ru[[:space:]]+ячейка\ не\ отвечает && $l_out =~ g[[:space:]]+4[[:space:]]+-[[:space:]]+g@x.ru[[:space:]]+ячейка\ не\ активна && $l_out == *"Всего пользователей: 6"* && $l_out == *"ячейки 3"* ]]'
+ok "list: неактивную ячейку 4 не опрашивали" '! grep -q "cell=4" $MC/calls'
+: > "$MC/calls"
+r_out=$(SELF=$MC/fakeself user_route reissue f 2>$MC/err); r_rc=$?
+ok "reissue: пользователь ячейки 2 найден по users.conf, сразу в нужной ячейке, ячейка названа в stderr" '[[ $r_rc == 0 && $r_out == "готово reissue f" && $(cat $MC/err) == *"[ячейка 2]"* && $(grep -c "reissue" $MC/calls) == 1 ]]'
+: > "$MC/calls"
+r_out=$(SELF=$MC/fakeself user_route keyconf client1 2>$MC/err); r_rc=$?
+ok "keyconf: пользователя нет в users.conf (завели на сервере) - ищется по ячейкам, вывод чистый (без пометок в stdout)" '[[ $r_rc == 0 && $r_out == "готово keyconf client1" && $(grep -c "cell=1 keyconf" $MC/calls) == 1 && $(grep -c "cell=2 keyconf" $MC/calls) == 1 ]]'
+r_out=$(SELF=$MC/fakeself user_route link nobody 2>&1); r_rc=$?
+ok "link: такого пользователя нигде нет - понятный отказ" '[[ $r_rc != 0 && $r_out == *"нет пользователя nobody ни в одной ячейке"* ]]'
+: > "$MC/calls"
+r_out=$(SELF=$MC/fakeself user_route resend d 2>&1); r_rc=$?
+ok "resend: ошибка в ячейке пользователя (не «нет пользователя») - показана, другие ячейки не пробуются" '[[ $r_rc != 0 && $r_out == *"relay failed"* && $r_out == *"ячейка 3"* ]] && ! grep -q "cell=1" $MC/calls'
+ok "плохое имя отклоняется" '! (SELF=$MC/fakeself user_route resend "a b") >/dev/null 2>&1 && ! (SELF=$MC/fakeself user_route resend "") >/dev/null 2>&1'
+: > "$MC/calls"
+SELF=$MC/fakeself all_cells users >/dev/null 2>&1
+ok "users/mirror: выполняются для каждой активной ячейки (1, 2, 3), неактивная пропущена" 'grep -q "cell=1 users" $MC/calls && grep -q "cell=2 users" $MC/calls && grep -q "cell=3 users" $MC/calls && ! grep -q "cell=4" $MC/calls'
+printf 'a a@x.ru\nf f@x.ru 2\n' > "$S/users.conf"; : > "$MC/calls"
+SELF=$MC/fakeself all_cells resendall skipempty >/dev/null 2>&1
+ok "resendall: ячейки без пользователей пропускаются" 'grep -q "cell=1 resendall" $MC/calls && grep -q "cell=2 resendall" $MC/calls && ! grep -q "cell=3" $MC/calls'
+
+# -- mailstatus: пользователи всех ячеек, журнал каждой
+VAMPN_CELLS_STATE=$T/cs; mkdir -p "$T/cs/2"; : > "$STATE/mail-status.tsv"
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' 1000 a a@x.ru key ok "" >> "$STATE/mail-status.tsv"
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' 1000 f f@x.ru key fail "SMTP: отказ" >> "$T/cs/2/mail-status.tsv"
+m_out=$(mailstatus 2>&1); m_rc=$?
+ok "mailstatus: пользователь ячейки 2 читается из журнала ячейки 2 и показан с номером ячейки" '[[ $m_rc == 1 && $m_out =~ f[[:space:]]+2[[:space:]]+f@x.ru && $m_out == *"НЕ УШЛО: SMTP: отказ"* && $m_out =~ a[[:space:]]+1[[:space:]]+a@x.ru ]]'
+unset VAMPN_CELLS_STATE
+rm -f "$CELLS_DIR"/[234].env
 
 unset -f twa ssh awg systemctl ssh-keyscan curl ssh-keygen
 
