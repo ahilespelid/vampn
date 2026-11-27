@@ -1048,7 +1048,7 @@ cat > "$RS/fakeself" <<'RSEOF'
 N0=@N0@
 case ${1:-} in
   peers) case ${VAMPN_CELL:-1} in
-    1) printf "основной\t1.1.1.1\ta\t-\t%s\t0\t0\n" $(( N0 - 100 )); printf "основной\t1.1.1.1\tb\t-\t%s\t0\t0\n" $(( N0 - 172800 )); printf "основной\t1.1.1.1\tc\t-\t0\t0\t0\n" ;;
+    1) printf "основной\t1.1.1.1\ta\t-\t%s\t0\t0\n" $(( N0 - 100 )); printf "основной\t1.1.1.1\tb\t-\t%s\t0\t0\n" $(( N0 - 172800 )); printf "основной\t1.1.1.1\tc\t-\t0\t0\t0\n"; printf "основной\t1.1.1.1\tg\t-\t%s\t0\t0\n" $(( N0 - 5400 )) ;;
     3) exit 1 ;;
     4) printf "запасной\t2.2.2.2\te\t-\t%s\t0\t0\n" $(( N0 - 60 )) ;;
   esac ;;
@@ -1068,6 +1068,9 @@ ok "rescue: b, c, d получают ячейку 2; a, e, f и коммента
 ok "rescue: список применён на старых ячейках (1 и 3) и на новой (2), копия users.conf сохранена" 'for c in 1 2 3; do grep -qx "users cell=$c" $RS/calls || exit 1; done; ! grep -qx "users cell=4" $RS/calls; ls $S/users.conf.bak.* >/dev/null 2>&1'
 ok "rescue: второй запуск - переносить некого" 'o=$(SELF=$RS/fakeself rescue_main 2 2>&1); [[ $o == *"отвалившихся: 0"* ]]'
 ok "rescue: плохие параметры и несуществующая ячейка отклоняются" '! (SELF=$RS/fakeself rescue_main) >/dev/null 2>&1 && ! (SELF=$RS/fakeself rescue_main 9) >/dev/null 2>&1 && ! (SELF=$RS/fakeself rescue_main 2 --hours 0) >/dev/null 2>&1 && ! (SELF=$RS/fakeself rescue_main 2 --bogus) >/dev/null 2>&1'
+cp "$S/users.conf" "$RS/users.after"; printf 'g g@x.ru\n' > "$S/users.conf"
+ok "rescue: порог по умолчанию 1 час - кто был 1,5 часа назад, уже отвалился; при --hours 2 - ещё нет" 'o=$(SELF=$RS/fakeself rescue_main 2 --dry 2>&1); [[ $o == *"отвалившихся: 1 (порог 1 ч)"* ]] && o=$(SELF=$RS/fakeself rescue_main 2 --dry --hours 2 2>&1) && [[ $o == *"отвалившихся: 0"* ]]'
+cp "$RS/users.after" "$S/users.conf"
 rm -f "$CELLS_DIR"/[234].env "$S"/users.conf.bak.*
 
 # -- adopt: сервер, поднятый vampn init, становится ячейкой

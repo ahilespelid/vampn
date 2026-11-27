@@ -36,7 +36,7 @@
 #   vampn add ИМЯ [почта] / del ИМЯ   (на таком сервере) завести / удалить пользователя; list, conf, qr, link, status - как везде
 #   vampn adopt IP [--hours Ч] [--no-rescue]
 #                         (homeserv) сервер, поднятый командой vampn init, становится ячейкой, а всех «отвалившихся» из ВСЕХ ячеек
-#                         (нет рукопожатия дольше Ч часов, по умолчанию 24, или ячейка не отвечает) переносит в неё и рассылает им новые ключи
+#                         (нет рукопожатия дольше Ч часов, по умолчанию 1, или ячейка не отвечает) переносит в неё и рассылает им новые ключи
 #   vampn rescue N [--hours Ч] [--dry]   то же самое переносом в уже существующую ячейку N; --dry - только показать, кого перенесёт
 #   vampn installscript   установочный бандл для чистого Debian (install.sh)
 #   VAMPN_CELL=N vampn ... любая команда homeserv для ячейки N (status, rotate, users, mirror, resendall ...)
@@ -2027,9 +2027,9 @@ spawn_run() { # КАБИНЕТ - сама аренда и развёртыван
 }
 
 rescue_main() { # N [--hours Ч] [--dry] - всех «отвалившихся» из ВСЕХ ячеек перенести в ячейку N: им уходят новые ключи
-  # отвалившийся: в его ячейке нет рукопожатия дольше Ч часов (по умолчанию 24), либо он ни разу не подключался, либо ячейка совсем не отвечает
+  # отвалившийся: в его ячейке нет рукопожатия дольше Ч часов (по умолчанию 1), либо он ни разу не подключался, либо ячейка совсем не отвечает
   (( CELL == 1 )) || die "rescue запускается без VAMPN_CELL"
-  local n=${1:-} hours=24 dry=0 c out name email cc hs reason age lim cur cnt=0 moved="" cells_touched=" "
+  local n=${1:-} hours=1 dry=0 c out name email cc hs reason age lim cur cnt=0 moved="" cells_touched=" "
   shift || true
   while (( $# )); do
     case $1 in --hours) hours=${2:-}; shift 2 ;; --dry) dry=1; shift ;; *) die "vampn rescue N [--hours Ч] [--dry]" ;; esac
@@ -2085,7 +2085,7 @@ rescue_main() { # N [--hours Ч] [--dry] - всех «отвалившихся»
 
 adopt_main() { # IP [--hours Ч] [--no-rescue] - сервер, поднятый командой vampn init, становится ячейкой; отвалившиеся из всех ячеек переезжают в неё
   (( CELL == 1 )) || die "adopt запускается без VAMPN_CELL"
-  local ip=${1:-} hours=24 key out
+  local ip=${1:-} hours=1 key out
   shift || true
   while (( $# )); do
     case $1 in --hours) hours=${2:-}; shift 2 ;; --no-rescue) hours=0; shift ;; *) die "vampn adopt IP [--hours Ч] [--no-rescue]" ;; esac
