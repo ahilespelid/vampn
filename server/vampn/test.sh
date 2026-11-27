@@ -880,6 +880,16 @@ echo "== 17. пир homeserv на новом сервере: адрес .3, ко
 ok "homeserv: один пир с адресом 10.77.4.3, повторный вызов ничего не меняет" 'grep -q "files=homeserv.conf homeserv.env" $T/hh.out && grep -q "^IP=10.77.4.3$" $T/hh.out'
 ok "конфиг туннеля: адрес клиента .3, endpoint нового сервера, ключ сервера" 'grep -q "^Address = 10.77.4.3/32" $T/hh.out && grep -q "^Endpoint = 203.0.113.7:" $T/hh.out && grep -q "^PublicKey = PUB-" $T/hh.out'
 
+rm -rf "$R/rs"; out=$(FAKE_BIN=$R/bin bash "$INS" --render-only --standalone --root "$R/rs" --payload "$R/pl" --net 10.77.4 --public-ip 203.0.113.9 2>&1); rc=$?
+ok "standalone: ключи homeserv не нужны, файлы сервера записаны" '[[ $rc == 0 && -f $R/rs/etc/amnezia/amneziawg/awg0.conf && -f $R/rs/etc/nftables.conf ]]'
+ok "standalone: ssh открыт на внешнем интерфейсе, а не только из туннеля, игры нет" 'grep -q "iifname \$WAN tcp dport 22 accept" $R/rs/etc/nftables.conf && ! grep -q "25565" $R/rs/etc/nftables.conf'
+ok "standalone: без ключа у root пароль ssh не отключается (хозяин не запрётся)" '[[ ! -f $R/rs/etc/ssh/sshd_config.d/00-vampn.conf ]] && grep -q "вход по паролю оставлен" <<<"$out"'
+ok "standalone: нет ключей и строк homeserv в authorized_keys" '! grep -q homeserv $R/rs/root/.ssh/authorized_keys 2>/dev/null'
+rm -rf "$R/rs2"; mkdir -p "$R/rs2/root/.ssh"; echo "$K4" > "$R/rs2/root/.ssh/authorized_keys"
+FAKE_BIN=$R/bin bash "$INS" --render-only --standalone --root "$R/rs2" --payload "$R/pl" --net 10.77.4 --public-ip 203.0.113.9 >/dev/null 2>&1
+ok "standalone: если у root есть ключ - вход по паролю отключается" 'grep -q "PasswordAuthentication no" $R/rs2/etc/ssh/sshd_config.d/00-vampn.conf'
+ok "standalone: без --standalone ключи по-прежнему обязательны" '! FAKE_BIN=$R/bin bash "$INS" --render-only --root "$R/rs3" --payload "$R/pl" --net 10.77.4 2>/dev/null'
+ok "init: без root отказ, параметры проверяются (неизвестный параметр)" '! bash "$FILE" init --bogus 2>/dev/null'
 mkdir -p "$R/ibin"; for c in apt-get gpg; do printf '#!/bin/bash\n%s\n' "$([[ $c == gpg ]] && echo 'exit 1' || echo 'echo "$0 $*" >> '"$R"'/apt.log; exit 0')" > "$R/ibin/$c"; chmod +x "$R/ibin/$c"; done
 rm -f "$R/apt.log"; out=$(PATH=$R/ibin:$PATH bash "$INS" --packages-only 2>&1); rc=$?
 if [[ -s /usr/share/keyrings/amnezia.gpg ]]; then ok "init: --packages-only обходит проверку параметров установки (--net и ключей не просит)" '! grep -q -- "--net" <<<"$out"'

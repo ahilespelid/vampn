@@ -29,7 +29,11 @@
 #   (spawn сам удаляет нерабочий сервер и ячейку, если развёртывание упало, и берёт новый сервер - до 5 попыток)
 #   vampn spawnresume N   продолжить развёртывание на уже созданном сервере ячейки N (если spawn упал, а сервер остался)
 #   vampn celldel N --yes удалить ячейку и её сервер
-#   vampn init            на новом чистом Debian: поставить все нужные пакеты (curl, nftables, python3, dkms, модуль AmneziaWG, утилиты awg и т.д.)
+#   vampn init [--user ИМЯ] [--net 10.77.4] [--port N] [--public-ip IP]
+#                         на новом чистом Debian 13 из клона репозитория (bash server/vampn/vampn init): поставить пакеты, AmneziaWG, файрвол,
+#                         самолечение и поднять рабочую ячейку без homeserv; в конце печатает конфиг, QR и ссылку первого пользователя.
+#                         --packages-only - только пакеты и утилиты awg
+#   vampn add ИМЯ [почта] / del ИМЯ   (на таком сервере) завести / удалить пользователя; list, conf, qr, link, status - как везде
 #   vampn installscript   установочный бандл для чистого Debian (install.sh)
 #   VAMPN_CELL=N vampn ... любая команда homeserv для ячейки N (status, rotate, users, mirror, resendall ...)
 #   vampn emergency on     включить аварийный канал (Бостон): VPN и Telegram через него, ключи на почту
@@ -681,8 +685,18 @@ srv_ifaces_ipv4() { ip -4 -o addr show dev eth0 scope global 2>/dev/null | awk '
 srv_pinned_ip() { [[ -f $PIN_FILE ]] && grep -Eo '[0-9]{1,3}(\.[0-9]{1,3}){3}' "$PIN_FILE" | head -1; }
 srv_private_ip() { [[ $1 =~ ^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.) ]]; }
 srv_expect() { get expect_ip "none 0"; }   # "IP метка_времени": какой адрес Timeweb выдал серверу, по словам homeserv
+detect_public_ip() { # внешний IPv4 так, как его видит интернет (у серверов Timeweb он бывает не на eth0)
+  local u ip
+  for u in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
+    ip=$(curl -4 -s -m 8 "$u" 2>/dev/null | tr -d '[:space:]')
+    [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && ! srv_private_ip "$ip" && { echo "$ip"; return 0; }
+  done
+  return 1
+}
 srv_effective_ip() { # адрес сервера для ключей: свежее сообщение homeserv (если этот адрес на eth0), иначе от DHCP
-  local e ip ts; e=$(srv_expect); ip=${e% *}; ts=${e#* }
+  local e ip ts
+  if [[ -f ${BASE:-/root/vampn}/standalone ]]; then detect_public_ip; return 0; fi   # сервер без homeserv: адрес узнаём снаружи
+  e=$(srv_expect); ip=${e% *}; ts=${e#* }
   if [[ $ip != none ]] && (( $(now) - ts < EXPECT_TTL )) && srv_ifaces_ipv4 | grep -qx "$ip"; then echo "$ip"; else srv_dhcp_ip; fi
 }
 srv_netplan_apply() { netplan generate >/dev/null 2>&1 && netplan apply >/dev/null 2>&1; }
@@ -841,6 +855,18 @@ srv_home_conf() {  # локально: конфиг туннеля для homese
   render homeserv; cat "$CL/homeserv.conf"
 }
 
+srv_add() {  # ИМЯ [ПОЧТА] - новый пользователь на сервере без homeserv: печатает конфиг, QR и ссылку для приложения AmneziaVPN
+  local n=${1:-}
+  [[ -n $n ]] || die "vampn add ИМЯ [почта]"
+  user_add "$n" "${2:-}"
+  echo "=== конфиг $n (AmneziaWG; файл $CL/$n.conf) ==="
+  cat "$CL/$n.conf"
+  echo "=== QR для приложения AmneziaVPN / AmneziaWG ==="
+  qrencode -t ansiutf8 < "$CL/$n.conf" 2>/dev/null || true
+  echo "=== ссылка для импорта в AmneziaVPN ==="
+  mailpy --link "$n" 2>/dev/null || true
+}
+
 srv_user_cmd() {  # reissue|resend|link ИМЯ
   local n=${2:-}
   [[ $n =~ ^[a-zA-Z0-9_.-]{1,32}$ ]] || die "нужно имя пользователя: vampn $1 ИМЯ"
@@ -860,6 +886,8 @@ server_main() {
       data_init; srv_heal_services
       srv_pin_expected; srv_heal_network && srv_follow_ip ;;
     status) data_init; srv_status ;;
+    add)    data_init; srv_add "${2:-}" "${3:-}" ;;
+    del)    data_init; valid_name "${2:-}"; [[ -f $CL/$2.env ]] || die "нет пользователя $2"; user_del "$2"; echo "удалён $2" ;;
     list)   data_init; users_list ;;
     peers)  data_init; users_peers ;;
     reissue|resend|link) data_init; srv_user_cmd "$@" ;;
@@ -2063,6 +2091,7 @@ install_sh() { cat <<'INSTALL_EOF'
 #
 #   install.sh --net 10.77.4 --payload DIR --key-root 'ssh-ed25519 ...' --key-users '...' --key-mirror '...'
 #              [--public-ip IP] [--span 4] [--limit 1000] [--port N] [--home-public-ip IP] [--admin-key '...']... [--no-game] [--name vampn_2]
+#              [--standalone]                    сервер без homeserv (так работает `vampn init`): ключи homeserv не нужны, ssh открыт всем (по ключам, если они есть)
 #              [--packages-only]                 только поставить пакеты, модуль AmneziaWG и утилиты awg (так работает `vampn init`)
 #              [--render-only --root DIR]        только записать файлы в DIR (для проверки), ничего не ставить и не запускать
 #   В DIR (--payload): vampn (скрипт), amnezia.gpg (ключ PPA), secrets.env (почта через homeserv: MAIL_METHOD=relay ...), необязательно.
@@ -2070,7 +2099,7 @@ install_sh() { cat <<'INSTALL_EOF'
 set -euo pipefail
 
 TOOLS_TAG=v3.1.20260812 TOOLS_COMMIT=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843   # amnezia-vpn/amneziawg-tools, как на рабочих серверах
-NET="" SPAN=4 LIMIT=1000 PORT="" PUBLIC_IP="" HOME_PUB_IP="" PAYLOAD="" NAME="" GAME=1 RENDER_ONLY=0 ROOT="" PACKAGES_ONLY=0
+NET="" SPAN=4 LIMIT=1000 PORT="" PUBLIC_IP="" HOME_PUB_IP="" PAYLOAD="" NAME="" GAME=1 RENDER_ONLY=0 ROOT="" PACKAGES_ONLY=0 STANDALONE=0
 KEY_ROOT="" KEY_USERS="" KEY_MIRROR="" ADMIN_KEYS=()
 say() { echo "[install] $*" >&2; }
 die() { echo "install.sh: $*" >&2; exit 1; }
@@ -2084,6 +2113,7 @@ while (( $# )); do
     --admin-key) ADMIN_KEYS+=("$2"); shift 2 ;;
     --no-game) GAME=0; shift ;;
     --packages-only) PACKAGES_ONLY=1; shift ;;
+    --standalone) STANDALONE=1; GAME=0; shift ;;
     --render-only) RENDER_ONLY=1; shift ;; --root) ROOT=${2%/}; shift 2 ;;
     -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) die "неизвестный параметр $1" ;;
@@ -2100,7 +2130,7 @@ if (( PACKAGES_ONLY )); then [[ $EUID == 0 ]] || die "нужен root"; ROOT="";
 [[ -z $HOME_PUB_IP || $HOME_PUB_IP =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "--home-public-ip: адрес IPv4"
 okkey() { [[ $1 =~ ^ssh-(ed25519|rsa)\ [A-Za-z0-9+/=]+(\ [^\"\']*)?$ ]]; }
 for k in "$KEY_ROOT" "$KEY_USERS" "$KEY_MIRROR" "${ADMIN_KEYS[@]}"; do [[ -z $k ]] || okkey "$k" || die "не похоже на открытый ключ ssh: ${k:0:30}"; done
-[[ -n $KEY_ROOT && -n $KEY_USERS && -n $KEY_MIRROR ]] || die "нужны --key-root, --key-users и --key-mirror (открытые ключи homeserv)"
+(( STANDALONE )) || [[ -n $KEY_ROOT && -n $KEY_USERS && -n $KEY_MIRROR ]] || die "нужны --key-root, --key-users и --key-mirror (открытые ключи homeserv)"
 [[ -n $PAYLOAD && -f $PAYLOAD/vampn ]] || die "--payload DIR: в каталоге должен лежать скрипт vampn"
 if (( ! RENDER_ONLY )); then [[ $EUID == 0 ]] || die "нужен root"; ROOT=""; else [[ -n $ROOT ]] || die "--render-only требует --root DIR"; fi
 
@@ -2191,7 +2221,8 @@ EOF
 
 write_nft() {
   local port; port=$(awk -F' *= *' '/^ListenPort/{print $2; exit}' "$D/awg0.conf")
-  local ssh_pub="" game_fwd="" game_nat=""
+  local ssh_pub="" game_fwd="" game_nat="" ssh_in="iifname \$VPN ip saddr $HOME_TIP tcp dport 22 accept"
+  (( ! STANDALONE )) || ssh_in="iifname \$WAN tcp dport 22 accept"
   [[ -z $HOME_PUB_IP ]] || ssh_pub="        # homeserv по публичному адресу (если туннель лёг): только ssh и только с него
         ip saddr $HOME_PUB_IP tcp dport 22 accept"
   if (( GAME )); then
@@ -2204,7 +2235,7 @@ write_nft() {
   install -d "$ROOT/etc"
   cat > "$ROOT/etc/nftables.conf" <<EOF
 #!/usr/sbin/nft -f
-# vampn firewall (install.sh): наружу открыт только порт AmneziaWG; ssh - только из туннеля с адреса homeserv.
+# vampn firewall (install.sh): наружу открыт порт AmneziaWG; ssh - из туннеля с адреса homeserv (в режиме standalone - отовсюду).
 flush ruleset
 
 define WAN = "eth0"
@@ -2219,7 +2250,7 @@ table inet filter {
         ct state established,related accept
         meta l4proto ipv6-icmp icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert, packet-too-big } accept
         iifname \$WAN udp dport \$AWG_PORT accept
-        iifname \$VPN ip saddr $HOME_TIP tcp dport 22 accept
+        $ssh_in
 ${ssh_pub}
     }
 
@@ -2250,12 +2281,22 @@ EOF
 
 write_ssh() {
   install -d -m 700 "$ROOT/root/.ssh"; install -d "$ROOT/etc/ssh/sshd_config.d"
+  local ak=$ROOT/root/.ssh/authorized_keys
+  if (( STANDALONE )); then
+    # без homeserv: вход по паролю отключаем только если у root уже есть ключ, иначе хозяин останется за дверью
+    if grep -qE '^(ssh-|ecdsa-|sk-)' "$ak" 2>/dev/null; then
+      printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' > "$ROOT/etc/ssh/sshd_config.d/00-vampn.conf"
+    else
+      say "ВНИМАНИЕ: у root нет ssh-ключа - вход по паролю оставлен. Добавьте ключ в /root/.ssh/authorized_keys, тогда пароль можно отключить"
+    fi
+    return 0
+  fi
   cat > "$ROOT/etc/ssh/sshd_config.d/00-vampn.conf" <<'EOF'
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin prohibit-password
 EOF
-  local ak=$ROOT/root/.ssh/authorized_keys tmp k; tmp=$(mktemp)
+  local tmp k; tmp=$(mktemp)
   [[ -f $ak ]] && grep -vE ' (homeserv|homeserv-mirror|homeserv-users|vampn-admin)$' "$ak" > "$tmp" || true
   for k in "${ADMIN_KEYS[@]}"; do echo "$k"; done | awk 'NF' | sed -E 's/^(ssh-[a-z0-9-]+ [A-Za-z0-9+\/=]+).*/\1 vampn-admin/' >> "$tmp"
   echo "restrict,from=\"$HOME_TIP\",command=\"tar -C /root/vampn -czf - server.env endpoint clients\" $(awk '{print $1, $2}' <<<"$KEY_MIRROR") homeserv-mirror" >> "$tmp"
@@ -2288,6 +2329,7 @@ WantedBy=timers.target
 EOF
   install -d -m 700 "$ROOT/etc/vampn"
   if [[ -f $PAYLOAD/secrets.env ]]; then install -m 600 "$PAYLOAD/secrets.env" "$ROOT/etc/vampn/secrets.env"
+  elif (( STANDALONE )); then printf 'MAIL_METHOD=smtp\n' > "$ROOT/etc/vampn/secrets.env"; chmod 600 "$ROOT/etc/vampn/secrets.env"
   else printf 'MAIL_METHOD=relay\nRELAY_HOST=%s\nRELAY_PORT=777\n' "$HOME_TIP" > "$ROOT/etc/vampn/secrets.env"; chmod 600 "$ROOT/etc/vampn/secrets.env"; fi
   grep -q '^RELAY_HOST=' "$ROOT/etc/vampn/secrets.env" || printf 'RELAY_HOST=%s\n' "$HOME_TIP" >> "$ROOT/etc/vampn/secrets.env"
 }
@@ -2364,8 +2406,9 @@ install_packages
 install_tools
 if (( PACKAGES_ONLY )); then say "пакеты и утилиты awg готовы"; echo "VAMPN_INIT_OK=1"; exit 0; fi
 write_awg; write_sysctl; write_nft; write_ssh; write_units
+(( ! STANDALONE )) || : > "$V/standalone"      # метка: сервер сам следит за своим адресом (homeserv нет)
 activate
-"/usr/local/sbin/vampn" homeinit >/dev/null     # создаёт пира homeserv (адрес $NET.3); его конфиг homeserv заберёт командой `vampn homeconf`
+(( STANDALONE )) || "/usr/local/sbin/vampn" homeinit >/dev/null     # создаёт пира homeserv (адрес $NET.3); его конфиг homeserv заберёт командой `vampn homeconf`
 verify
 echo "VAMPN_PORT=$(awk -F' *= *' '/^ListenPort/{print $2; exit}' "$D/awg0.conf")"
 echo "VAMPN_SERVER_PUBKEY=$(sed -n 's/^SERVER_PUBKEY=//p' "$V/server.env")"
@@ -2454,6 +2497,37 @@ home_remote() {
 
 usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$SELF"; exit "${1:-0}"; }
 
+init_main() { # vampn init [--user ИМЯ] [--net 10.77.4] [--port N] [--public-ip IP] [--name ИМЯ_СЕРВЕРА] [--packages-only]
+  # На ЧИСТОМ Debian 13 из клона репозитория: ставит пакеты, AmneziaWG, файрвол, самолечение и поднимает рабочую ячейку
+  # (сервер без homeserv); в конце печатает конфиг, QR и ссылку первого пользователя. Повторный запуск ничего не ломает.
+  [[ $EUID == 0 ]] || die "vampn init: нужен root"
+  local user=client1 net=10.77.4 port="" pub="" name="" pk=0 src dir pay out
+  while (( $# )); do
+    case $1 in
+      --user) user=${2:?имя}; shift 2 ;;     --net) net=${2:?сеть}; shift 2 ;;       --port) port=${2:?порт}; shift 2 ;;
+      --public-ip) pub=${2:?IP}; shift 2 ;;  --name) name=${2:?имя}; shift 2 ;;      --packages-only) pk=1; shift ;;
+      *) die "vampn init: неизвестный параметр $1 (есть --user --net --port --public-ip --name --packages-only)" ;;
+    esac
+  done
+  if (( pk )); then install_sh | bash -s -- --packages-only; return; fi
+  valid_name "$user"
+  src=$(readlink -f "$0"); dir=$(dirname "$src")
+  pay=$(mktemp -d); chmod 700 "$pay"; cp "$src" "$pay/vampn"
+  [[ -f $dir/amnezia.gpg ]] && cp "$dir/amnezia.gpg" "$pay/amnezia.gpg"
+  if [[ -z $pub ]]; then pub=$(detect_public_ip) || { echo "vampn init: внешний IP не определился, укажите --public-ip IP" >&2; rm -rf "$pay"; exit 1; }; fi
+  echo "[init] внешний адрес сервера: $pub, сеть VPN: $net.0/22" >&2
+  out=$(install_sh | bash -s -- --standalone --payload "$pay" --net "$net" --span 4 --public-ip "$pub" ${port:+--port "$port"} ${name:+--name "$name"}) \
+    || { local rc=$?; rm -rf "$pay"; echo "$out" >&2; exit "$rc"; }
+  rm -rf "$pay"
+  echo "$out" | grep -E '^VAMPN_(PORT|SERVER_PUBKEY)=' >&2 || true
+  if ! ls /root/vampn/clients/*.env >/dev/null 2>&1; then
+    VAMPN_BASE=/root/vampn /usr/local/sbin/vampn add "$user"
+  else
+    echo "[init] пользователи уже есть: vampn list; новый - vampn add ИМЯ" >&2
+  fi
+  echo "[init] готово: сервер vampn работает. Команды: vampn add ИМЯ, vampn list, vampn conf ИМЯ, vampn qr ИМЯ, vampn link ИМЯ, vampn del ИМЯ, vampn status" >&2
+}
+
 selfupdate_main() { # stdin: новый скрипт vampn от homeserv; ставится, только если он целый, старый остаётся как .prev
   local dst=${VAMPN_INSTALL:-$SELF} tmp
   tmp=$(mktemp "$(dirname "$dst")/.vampn-new.XXXXXX") || die "не могу создать временный файл"
@@ -2480,7 +2554,7 @@ case ${1:-} in
   mailsend) shift; mailpy "$@"; exit ;;
   endpointchange) data_init; endpoint_change "${2:?IP}"; exit ;;
   selfupdate) selfupdate_main; exit ;;
-  init) [[ $EUID == 0 ]] || die "vampn init: нужен root"; install_sh | bash -s -- --packages-only; exit ;;   # на новом сервере: поставить все нужные пакеты
+  init) shift; init_main "$@"; exit ;;   # на новом чистом сервере: развернуть проект целиком и выдать готовую ячейку
   help|-h|--help) usage 0 ;;
   '') usage 1 ;;
 esac
